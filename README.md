@@ -130,6 +130,7 @@ playbook; server changes and package updates go through
 |---|---|
 | `make lint` | ansible-lint, production profile |
 | `make units` | unit tests of the filter plugins (`PYTHON=` with pytest) |
+| `make sanity` | `ansible-test sanity` and `units` on exactly the tracked files (as in CI) |
 | `make build` | build the collection artifact |
 | CI | ansible-lint, `ansible-test sanity` and `units` for ansible-core 2.19–2.21, build |
 | [`tests/hetzner/`](tests/hetzner/README.md) | end-to-end tests on real VMs (Debian 12 and 13): replication, client login, RBAC, hardening, failover, rolling update |
