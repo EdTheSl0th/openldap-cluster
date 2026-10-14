@@ -1,0 +1,43 @@
+---
+# A configuration change rolled out by test_update.yml:
+# new team/role/user, stricter password policy, additional index.
+test_groups_extra:
+  - { name: support, gid: 20005, description: Support team }
+
+test_roles_extra:
+  - name: support-agent
+    description: First-level support on the application servers
+    groups: [support, logreaders]
+    host_access: [app]
+    sudo:
+      - { hostgroups: [app], commands: [/usr/bin/journalctl], options: ["!authenticate"] }
+
+test_users_extra:
+  - uid: erin
+    given_name: Erin
+    sn: Support
+    uid_number: 10005
+    roles: [support-agent]
+    password: "{{ ldap_secret_seed | openldap.cluster.derive_password('user:erin', 24) }}"
+
+ldap_ppolicy:
+  pwdMinLength: 14
+  pwdInHistory: 5
+  pwdCheckQuality: 1
+  pwdLockout: "TRUE"
+  pwdMaxFailure: 5
+  pwdLockoutDuration: 900
+  pwdFailureCountInterval: 900
+  pwdMaxAge: 0
+  pwdAllowUserChange: "TRUE"
+  pwdMustChange: "FALSE"
+
+ldap_indexes:
+  - objectClass eq
+  - entryCSN,entryUUID eq
+  - cn,uid eq,sub
+  - uidNumber,gidNumber eq
+  - member eq
+  - mail eq
+  - sudoUser,sudoHost eq,sub
+  - givenName,sn eq,sub

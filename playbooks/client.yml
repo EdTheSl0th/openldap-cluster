@@ -1,0 +1,6 @@
+---
+- name: LDAP clients
+  hosts: "{{ ldap_target | default('ldap_clients') }}"
+  become: true
+  roles:
+    - openldap.cluster.client

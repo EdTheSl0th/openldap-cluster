@@ -1,0 +1,11 @@
+---
+profile: production
+exclude_paths:
+  - .github/
+  - tests/hetzner/.collections/
+  - tests/hetzner/terraform/
+  - tests/output/
+skip_list:
+  # All roles share the ldap_* namespace on purpose (one configuration for
+  # server, ha, directory and client).
+  - var-naming[no-role-prefix]

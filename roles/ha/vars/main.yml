@@ -1,0 +1,10 @@
+---
+_peers: "{{ groups[ldap_servers_group] | sort | reject('eq', inventory_hostname) | list }}"
+# Peer addresses from the inventory (ldap_node_address, else ansible_host).
+_peer_addr: >-
+  {%- set out = {} -%}
+  {%- for p in _peers -%}
+  {%- set _ = out.update({p: hostvars[p].ldap_node_address | default(hostvars[p].ansible_host)}) -%}
+  {%- endfor -%}
+  {{ out }}
+_providers: [vrrp, hetzner]

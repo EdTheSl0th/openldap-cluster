@@ -1,0 +1,13 @@
+---
+# Users, groups, roles, sudo rules. Written once to a single provider,
+# replication distributes it.
+- name: Directory content
+  hosts: "{{ ldap_target | default('ldap_servers') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Manage directory content
+      ansible.builtin.include_role:
+        name: openldap.cluster.directory
+        apply:
+          run_once: true

@@ -1,0 +1,33 @@
+---
+- name: LDAP server answers on ldapi
+  ansible.builtin.command: ldapwhoami -Q -Y EXTERNAL -H ldapi:///
+  register: _v_whoami
+  retries: 10
+  delay: 3
+  until: _v_whoami.rc == 0
+  changed_when: false
+
+- name: TLS 1.3 listener with a valid certificate
+  ansible.builtin.shell: >-
+    openssl s_client -connect {{ ldap_node_address }}:636 -tls1_3 -verify_return_error
+    -CAfile {{ ldap_tls_dir }}/ca.crt -verify_ip {{ ldap_node_address }} </dev/null
+  changed_when: false
+
+- name: Local contextCSN
+  ansible.builtin.command: >-
+    ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -s base -b "{{ ldap_suffix }}" contextCSN
+  register: _v_csn_local
+  changed_when: false
+
+- name: Peers have the same contextCSN (replication converged)
+  ansible.builtin.command: >-
+    ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -s base -b "{{ ldap_suffix }}" contextCSN
+  delegate_to: "{{ item }}"
+  loop: "{{ _ldap_peers }}"
+  register: _v_csn_peer
+  until: >-
+    (_v_csn_peer.stdout_lines | select('match', '^contextCSN') | sort)
+    == (_v_csn_local.stdout_lines | select('match', '^contextCSN') | sort)
+  retries: 40
+  delay: 3
+  changed_when: false

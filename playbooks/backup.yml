@@ -1,0 +1,14 @@
+---
+- name: Backup all providers
+  hosts: "{{ ldap_target | default('ldap_servers') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Dump cn=config and data
+      ansible.builtin.command: /usr/local/sbin/slapd-backup
+      register: _backup
+      changed_when: true
+
+    - name: Backup location
+      ansible.builtin.debug:
+        msg: "{{ _backup.stdout }}-{config,data}.ldif.gz"

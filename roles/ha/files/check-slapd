@@ -1,0 +1,4 @@
+#!/bin/sh
+# Healthy = slapd answers on the local socket and listens on the node address.
+timeout 3 ldapwhoami -Q -Y EXTERNAL -H ldapi:/// >/dev/null 2>&1 || exit 1
+ss -Hltn 'sport = :636' | grep -q . || exit 1

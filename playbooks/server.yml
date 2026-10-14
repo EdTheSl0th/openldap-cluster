@@ -1,0 +1,11 @@
+---
+# Deploy/refresh LDAP providers one at a time. Deploy a single node with
+#   ansible-playbook openldap.cluster.server --limit ldap2
+- name: LDAP providers
+  hosts: "{{ ldap_target | default('ldap_servers') }}"
+  serial: 1
+  become: true
+  roles:
+    - role: openldap.cluster.server
+    - role: openldap.cluster.ha
+      when: ldap_vip | default('') | length > 0

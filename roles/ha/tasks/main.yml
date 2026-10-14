@@ -1,0 +1,79 @@
+---
+- name: Validate input
+  ansible.builtin.assert:
+    that:
+      - ldap_ha_vip | length > 0
+      - ldap_secret_seed is defined
+      - groups[ldap_servers_group] | length >= 2
+      - ldap_ha_provider in _providers
+    fail_msg: >-
+      openldap.cluster.ha needs ldap_vip, ldap_secret_seed, >= 2 servers and
+      ldap_ha_provider in {{ _providers }}.
+    quiet: true
+
+- name: Detect interface of the node address
+  ansible.builtin.set_fact:
+    _ldap_ha_iface: >-
+      {{ ldap_ha_interface if ldap_ha_interface | length > 0 else
+         (ansible_facts.interfaces | map('regex_replace', '-', '_') | map('extract', ansible_facts)
+          | selectattr('ipv4', 'defined') | selectattr('ipv4.address', 'equalto', ldap_node_address)
+          | map(attribute='device') | first) }}
+
+- name: Install keepalived
+  ansible.builtin.apt:
+    name: [keepalived, python3]
+    state: present
+    install_recommends: false
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop: [/etc/ldap-ha, /usr/local/libexec/ldap-ha]
+
+- name: Health check
+  ansible.builtin.copy:
+    src: check-slapd
+    dest: /usr/local/libexec/ldap-ha/check-slapd
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Provider hetzner
+  ansible.builtin.include_tasks: provider_hetzner.yml
+  when: ldap_ha_provider == 'hetzner'
+
+- name: Remove files of unused providers
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/ldap-ha/hetzner.json
+    - /usr/local/libexec/ldap-ha/hetzner-failover
+  when: ldap_ha_provider != 'hetzner'
+
+- name: Master transition hook
+  ansible.builtin.template:
+    src: notify-master.j2
+    dest: /usr/local/libexec/ldap-ha/notify-master
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Keepalived configuration
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Reload keepalived
+
+- name: Start keepalived
+  ansible.builtin.systemd_service:
+    name: keepalived
+    state: started
+    enabled: true

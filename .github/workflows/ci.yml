@@ -1,0 +1,64 @@
+---
+name: CI
+
+"on":
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: ansible-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tools and dependencies
+        run: |
+          pip install ansible-core ansible-lint
+          ansible-galaxy collection install community.general community.crypto ansible.posix
+
+      - name: Make this collection importable by the test playbooks
+        run: make -C tests/hetzner collection
+
+      - name: Lint
+        run: ANSIBLE_COLLECTIONS_PATH="$PWD/tests/hetzner/.collections:$HOME/.ansible/collections" ansible-lint
+
+  ansible-test:
+    name: ${{ matrix.type }} (ansible-core ${{ matrix.ansible }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ansible: [stable-2.19, stable-2.20, stable-2.21]
+        type: [sanity, units]
+    steps:
+      - uses: ansible-community/ansible-test-gh-action@release/v1
+        with:
+          ansible-core-version: ${{ matrix.ansible }}
+          testing-type: ${{ matrix.type }}
+
+  build:
+    name: Build collection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build
+        run: |
+          pip install ansible-core
+          ansible-galaxy collection build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: collection
+          path: "*.tar.gz"

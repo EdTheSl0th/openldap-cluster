@@ -1,0 +1,65 @@
+---
+# Runs exactly once per node: only when cn=config does not exist yet. Every
+# later change is applied online (config.yml/database.yml), so re-running the
+# role never re-initialises configuration or data.
+- name: Check for existing cn=config
+  ansible.builtin.stat:
+    path: /etc/ldap/slapd.d/cn=config.ldif
+  register: _ldap_config
+
+- name: Bootstrap
+  when: not _ldap_config.stat.exists
+  block:
+    - name: Stop slapd
+      ansible.builtin.systemd_service:
+        name: slapd
+        state: stopped
+      failed_when: false
+
+    - name: Refuse to bootstrap over existing data
+      ansible.builtin.find:
+        paths: /var/lib/ldap
+        patterns: "*.mdb"
+      register: _ldap_mdb
+      failed_when: _ldap_mdb.matched > 0
+
+    - name: Render bootstrap configuration
+      ansible.builtin.template:
+        src: bootstrap.ldif.j2
+        dest: /run/slapd-bootstrap.ldif
+        mode: "0600"
+
+    - name: Load bootstrap configuration
+      ansible.builtin.command:
+        cmd: slapadd -n0 -F /etc/ldap/slapd.d -l /run/slapd-bootstrap.ldif
+      changed_when: true
+
+    - name: Ownership of cn=config
+      ansible.builtin.file:
+        path: /etc/ldap/slapd.d
+        state: directory
+        owner: openldap
+        group: openldap
+        recurse: true
+
+    - name: Remove bootstrap file
+      ansible.builtin.file:
+        path: /run/slapd-bootstrap.ldif
+        state: absent
+
+- name: Apply pending restarts (listeners, TLS files, hardening)
+  ansible.builtin.meta: flush_handlers
+
+- name: Start slapd
+  ansible.builtin.systemd_service:
+    name: slapd
+    state: started
+    enabled: true
+
+- name: Wait for ldapi
+  ansible.builtin.command: ldapwhoami -Q -Y EXTERNAL -H ldapi:///
+  register: _ldap_whoami
+  retries: 10
+  delay: 2
+  until: _ldap_whoami.rc == 0
+  changed_when: false

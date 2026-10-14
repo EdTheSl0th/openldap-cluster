@@ -1,0 +1,21 @@
+#cloud-config
+# Deliberately minimal and distro-neutral (Debian/Ubuntu/RHEL family): only a
+# passwordless sudo user for Ansible. Everything else stays at image defaults
+# so the collections under test start from a clean system.
+
+hostname: ${hostname}
+fqdn: ${fqdn}
+
+package_update: true
+
+packages:
+  - python3
+  - sudo
+
+users:
+  - default
+  - name: ${ssh_user}
+    lock_passwd: true
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys: ${jsonencode(ssh_authorized_keys)}

@@ -1,0 +1,45 @@
+# {{ ansible_managed }}
+global_defs {
+  router_id {{ inventory_hostname }}
+  script_user root
+  enable_script_security
+}
+
+vrrp_script chk_slapd {
+  script "/usr/local/libexec/ldap-ha/check-slapd"
+  interval {{ ldap_ha_check_interval }}
+  timeout 5
+  fall {{ ldap_ha_check_fall }}
+  rise 2
+}
+
+vrrp_instance LDAP {
+  state BACKUP
+  nopreempt
+  interface {{ _ldap_ha_iface }}
+  virtual_router_id {{ ldap_ha_vrid }}
+  priority {{ ldap_ha_priority }}
+  advert_int 1
+{% if ldap_ha_unicast | bool %}
+  unicast_src_ip {{ ldap_node_address }}
+  unicast_peer {
+{% for peer in _peers %}
+    {{ _peer_addr[peer] }}
+{% endfor %}
+  }
+{% endif %}
+  # Announce the IP on layer 2 right away and periodically.
+  garp_master_delay 1
+  garp_master_refresh 60
+  authentication {
+    auth_type PASS
+    auth_pass {{ ldap_secret_seed | openldap.cluster.derive_password('vrrp', 8) }}
+  }
+  virtual_ipaddress {
+    {{ ldap_ha_vip }}/{{ ldap_ha_vip_prefix }} dev {{ _ldap_ha_iface }}
+  }
+  track_script {
+    chk_slapd
+  }
+  notify_master "/usr/local/libexec/ldap-ha/notify-master"
+}

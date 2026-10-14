@@ -1,0 +1,32 @@
+---
+# Shared IP for the LDAP providers, managed by keepalived (VRRP).
+ldap_ha_vip: "{{ ldap_vip }}"
+ldap_ha_vip_prefix: 32
+ldap_servers_group: ldap_servers
+# Same variable as in the server role; peers are resolved from the inventory.
+ldap_node_address: "{{ ansible_facts.default_ipv4.address }}"
+# Interface holding ldap_node_address (auto-detected when empty).
+ldap_ha_interface: ""
+ldap_ha_vrid: 51
+# Initial master = first host in the group; nopreempt avoids flapping later.
+ldap_ha_priority: "{{ 150 - 10 * (groups[ldap_servers_group] | sort).index(inventory_hostname) }}"
+ldap_ha_check_interval: 2
+ldap_ha_check_fall: 2
+# Unicast VRRP works everywhere (also without multicast); false = multicast.
+ldap_ha_unicast: true
+
+# How the shared IP reaches the new master:
+#   vrrp     keepalived sets the IP and announces it with gratuitous ARP.
+#            Any layer-2 network: Proxmox bridges/VLANs, VMware, bare metal.
+#   hetzner  additionally moves a Hetzner Cloud alias IP via the API
+#            (routed networks without ARP between servers).
+ldap_ha_provider: vrrp
+
+# Extra commands run (as root) when this node becomes master, e.g. to move a
+# cloud IP on other platforms.
+ldap_ha_notify_master: []
+
+# Provider "hetzner" (required only there). Use a token of a dedicated project.
+# ldap_ha_hetzner_token:
+# ldap_ha_hetzner_network_id:     ID of the private network
+# ldap_ha_hetzner_server_id:      ID of this server (set per host)

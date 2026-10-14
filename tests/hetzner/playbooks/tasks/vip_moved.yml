@@ -1,0 +1,43 @@
+---
+# Wait until the shared IP is active on new_holder (all providers), routed by
+# Hetzner (provider hetzner) and usable by the client (routed networks).
+- name: VIP is configured on {{ new_holder }}
+  ansible.builtin.command: ip -4 -o addr show
+  delegate_to: "{{ new_holder }}"
+  become: true
+  register: _vip_new
+  until: vip_pattern in _vip_new.stdout
+  retries: 30
+  delay: 1
+  changed_when: false
+
+- name: VIP is gone from {{ old_holder }}
+  ansible.builtin.command: ip -4 -o addr show
+  delegate_to: "{{ old_holder }}"
+  become: true
+  register: _vip_old
+  changed_when: false
+  failed_when: vip_pattern in _vip_old.stdout
+  when: old_holder_up
+
+- name: Hetzner routes the alias IP to {{ new_holder }}
+  ansible.builtin.uri:
+    url: "{{ api }}/{{ hostvars[new_holder].hcloud_server_id }}"
+    headers: "{{ api_headers }}"
+  register: _srv
+  until: vip in (_srv.json.server.private_net | map(attribute='alias_ips') | flatten)
+  retries: 30
+  delay: 2
+  no_log: true
+  when: provider == 'hetzner'
+
+- name: Client works through the shared IP
+  ansible.builtin.command: "{{ client_check }}"
+  delegate_to: "{{ client }}"
+  register: _c
+  until: _c.rc == 0
+  retries: 15
+  delay: 2
+  changed_when: false
+  no_log: true
+  when: vip_routed

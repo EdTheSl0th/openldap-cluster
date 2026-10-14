@@ -1,0 +1,55 @@
+---
+# Runs against one provider (ldapi, SASL EXTERNAL as root); replication
+# distributes the result. Uses the DIT layout of openldap.cluster.server.
+ldap_domain: example.org
+ldap_suffix: "{{ ldap_domain | openldap.cluster.suffix_from_domain }}"
+ldap_dn_people: "ou=people,{{ ldap_suffix }}"
+ldap_dn_groups: "ou=groups,{{ ldap_suffix }}"
+ldap_dn_roles: "ou=roles,{{ ldap_suffix }}"
+ldap_dn_sudoers: "ou=sudoers,{{ ldap_suffix }}"
+ldap_dn_system: "ou=system,{{ ldap_suffix }}"
+ldap_role_admins: ldap-admins
+ldap_role_user_admins: user-admins
+ldap_role_auditors: auditors
+
+# Primary group of all directory users.
+ldap_users_group: ldapusers
+ldap_users_gid: 10000
+ldap_home_base: /home
+
+# Posix groups (unix groups on the clients).
+#   - { name: developers, gid: 20001, description: ... }
+ldap_groups: []
+
+# Sets of hosts (FQDNs or inventory names, "ALL" = every host). Each hostgroup
+# gets a login group "access-<name>" with the given gid.
+#   - { name: web, gid: 30001, hosts: [web1.example.org] }
+ldap_hostgroups: []
+
+# Roles bundle permissions; users get roles, never permissions directly.
+#   - name: web-operator
+#     description: ...
+#     groups: [developers]            # posix group memberships
+#     host_access: [web]              # login on these hostgroups
+#     sudo:                           # sudoRole entries (SSSD sudo provider)
+#       - { hostgroups: [web], commands: ["/usr/bin/systemctl restart nginx"], options: ["!authenticate"] }
+# The built-in roles ldap-admins / user-admins / auditors grant rights on the
+# directory itself (see ldap_acl in openldap.cluster.server).
+ldap_roles: []
+
+# Users. password is only used when the entry is created (self-service changes
+# are never overwritten). state: absent removes the user.
+#   - uid: alice
+#     given_name: Alice
+#     sn: Example
+#     uid_number: 10001
+#     mail: alice@example.org
+#     roles: [web-operator]
+#     groups: []                      # extra posix groups
+#     host_access: []                 # extra hostgroups
+#     shell: /bin/bash                # optional, managed only if set
+#     password: "..."                 # initial password (vault!)
+ldap_users: []
+
+# Remove sudoRole entries in ou=sudoers that are no longer generated.
+ldap_prune_sudoers: true

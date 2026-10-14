@@ -1,0 +1,8 @@
+---
+_ldap_server_addr: >-
+  {%- set out = [] -%}
+  {%- for s in groups[ldap_servers_group] | sort -%}
+  {%- set _ = out.append(hostvars[s].ldap_node_address | default(hostvars[s].ansible_host)) -%}
+  {%- endfor -%}
+  {{ out }}
+_ldap_host_pw: "{{ ldap_client_fqdn | openldap.cluster.host_password(ldap_secret_seed) }}"

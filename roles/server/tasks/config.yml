@@ -1,0 +1,86 @@
+---
+# --- Schemas (additive only; existing schemas are never modified) -----------
+- name: Ship collection schemas
+  ansible.builtin.copy:
+    src: schema/sudo.ldif
+    dest: /etc/ldap/schema/sudo.ldif
+    mode: "0644"
+
+# rfc2307bis = nis with posixGroup AUXILIARY, so groups can be
+# groupOfNames (member DNs, ACL groups) and posixGroup (gidNumber) at once.
+- name: Derive rfc2307bis schema from Debian's nis schema
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      perl -0pe 's/\n //g' /etc/ldap/schema/nis.ldif
+      | sed -e 's/^dn: cn=nis,/dn: cn=rfc2307bis,/' -e 's/^cn: nis$/cn: rfc2307bis/'
+      -e "/NAME 'posixGroup'/s/STRUCTURAL/AUXILIARY/"
+      > /etc/ldap/schema/rfc2307bis.ldif
+    creates: /etc/ldap/schema/rfc2307bis.ldif
+    executable: /bin/bash
+
+- name: Read loaded schemas
+  ansible.builtin.command: ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -b cn=schema,cn=config -s one cn
+  register: _ldap_schemas
+  changed_when: false
+
+- name: Load missing schemas
+  ansible.builtin.command: ldapadd -Q -Y EXTERNAL -H ldapi:/// -f /etc/ldap/schema/{{ item }}.ldif
+  # reject() keeps the order (dependencies); difference() would not.
+  loop: "{{ ldap_schemas | reject('in', _ldap_schemas.stdout | regex_findall('cn: \\{\\d+\\}(\\S+)')) | list }}"
+  changed_when: true
+
+# --- Modules (additive) --------------------------------------------------------
+- name: Read loaded modules
+  ansible.builtin.command: ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -b cn=module{0},cn=config -s base olcModuleLoad
+  register: _ldap_modules
+  changed_when: false
+
+- name: Load missing modules
+  ansible.builtin.command:
+    cmd: ldapmodify -Q -Y EXTERNAL -H ldapi:///
+    stdin: |
+      dn: cn=module{0},cn=config
+      changetype: modify
+      add: olcModuleLoad
+      olcModuleLoad: {{ item }}
+  loop: "{{ ldap_modules | reject('in', _ldap_modules.stdout | regex_findall('olcModuleLoad: \\{\\d+\\}(\\S+)')) | list }}"
+  changed_when: true
+
+# --- Global settings -----------------------------------------------------------
+- name: Detect the TLS library of slapd
+  ansible.builtin.command: ldd /usr/sbin/slapd
+  register: _ldap_ldd
+  changed_when: false
+
+# One modify operation: slapd validates certificate and key together.
+- name: Global configuration (TLS 1.3 only, no anonymous access, SSF >= 128)
+  community.general.ldap_attrs:
+    dn: cn=config
+    state: exact
+    attributes:
+      olcServerID: "{{ ldap_server_id }}"
+      olcLocalSSF: "256"
+      olcTLSCACertificateFile: "{{ ldap_tls_dir }}/ca.crt"
+      olcTLSCertificateFile: "{{ ldap_tls_dir }}/server.crt"
+      olcTLSCertificateKeyFile: "{{ ldap_tls_dir }}/server.key"
+      olcTLSCipherSuite: "{{ ldap_tls_gnutls_priority if _ldap_gnutls else ldap_tls_openssl_ciphers }}"
+      olcTLSECName: "{{ [] if _ldap_gnutls else ldap_tls_openssl_curves }}"
+      olcTLSProtocolMin: "{{ ldap_tls_protocol_min }}"
+      olcTLSVerifyClient: never
+      olcSecurity: ssf=128 simple_bind=128 update_ssf=128
+      olcDisallows: bind_anon
+      olcRequires: authc
+      olcSaslSecProps: noanonymous,noplain
+      olcIdleTimeout: "900"
+      olcWriteTimeout: "30"
+      olcLogLevel: "{{ ldap_log_level }}"
+
+- name: Frontend defaults (password hashing, limits)
+  community.general.ldap_attrs:
+    dn: olcDatabase={-1}frontend,cn=config
+    state: exact
+    attributes:
+      olcPasswordHash: "{{ ldap_password_hash }}"
+      olcSizeLimit: "{{ ldap_size_limit }}"
+      olcTimeLimit: "{{ ldap_time_limit }}"

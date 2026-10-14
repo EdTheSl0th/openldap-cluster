@@ -1,0 +1,49 @@
+# {{ ansible_managed }}
+[sssd]
+services = nss, pam{{ ', sudo' if ldap_client_sudo | bool else '' }}
+domains = ldap
+
+[nss]
+filter_users = root
+filter_groups = root
+
+[domain/ldap]
+id_provider = ldap
+auth_provider = ldap
+chpass_provider = ldap
+{% if ldap_client_hostgroups | length > 0 %}
+# Login only for members of the hostgroups' access groups (roles -> host_access).
+access_provider = simple
+simple_allow_groups = {{ ldap_client_hostgroups | map('regex_replace', '^', 'access-') | join(', ') }}
+{% else %}
+# Host is in no hostgroup: nobody from the directory may log in.
+access_provider = deny
+{% endif %}
+{% if ldap_client_sudo | bool %}
+sudo_provider = ldap
+ldap_sudo_search_base = {{ ldap_dn_sudoers }}
+ldap_sudo_smart_refresh_interval = {{ ldap_client_sudo_refresh }}
+{% else %}
+sudo_provider = none
+{% endif %}
+
+ldap_uri = {{ ldap_client_uri }}
+ldap_backup_uri = {{ ldap_client_backup_uris | join(', ') }}
+ldap_search_base = {{ ldap_suffix }}
+ldap_user_search_base = {{ ldap_dn_people }}
+ldap_group_search_base = {{ ldap_dn_groups }}
+ldap_schema = rfc2307bis
+ldap_group_member = member
+
+ldap_default_bind_dn = {{ ldap_client_bind_dn }}
+ldap_default_authtok_type = password
+ldap_default_authtok = {{ _ldap_host_pw }}
+
+ldap_tls_reqcert = demand
+ldap_tls_cacert = /usr/local/share/ca-certificates/ldap-ca.crt
+ldap_network_timeout = 3
+ldap_opt_timeout = 5
+ldap_connection_expire_timeout = 600
+
+cache_credentials = {{ 'true' if ldap_client_cache_credentials | bool else 'false' }}
+enumerate = false

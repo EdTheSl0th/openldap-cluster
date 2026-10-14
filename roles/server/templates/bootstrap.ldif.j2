@@ -1,0 +1,48 @@
+# {{ ansible_managed }}
+# Minimal cn=config, loaded once with slapadd. Everything else is applied
+# online by openldap.cluster.server.
+{% set root = 'gidNumber=0+uidNumber=0,cn=peercred,cn=external,cn=auth' %}
+dn: cn=config
+objectClass: olcGlobal
+cn: config
+olcArgsFile: /var/run/slapd/slapd.args
+olcPidFile: /var/run/slapd/slapd.pid
+olcLocalSSF: 256
+olcServerID: {{ ldap_server_id }}
+
+dn: cn=module{0},cn=config
+objectClass: olcModuleList
+cn: module{0}
+olcModulePath: /usr/lib/ldap
+{% for m in ldap_modules %}
+olcModuleLoad: {{ '{' ~ loop.index0 ~ '}' ~ m }}
+{% endfor %}
+
+dn: cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: schema
+
+include: file:///etc/ldap/schema/core.ldif
+
+dn: olcDatabase={-1}frontend,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcFrontendConfig
+olcDatabase: {-1}frontend
+olcAccess: {0}to * by dn.exact={{ root }} manage by * break
+
+dn: olcDatabase={0}config,cn=config
+objectClass: olcDatabaseConfig
+olcDatabase: {0}config
+olcRootDN: {{ root }}
+olcAccess: {0}to * by dn.exact={{ root }} manage by * none
+
+dn: olcDatabase={1}mdb,cn=config
+objectClass: olcDatabaseConfig
+objectClass: olcMdbConfig
+olcDatabase: {1}mdb
+olcSuffix: {{ ldap_suffix }}
+olcDbDirectory: /var/lib/ldap
+olcRootDN: {{ root }}
+olcDbIndex: objectClass eq
+olcDbIndex: entryCSN,entryUUID eq
+olcAccess: {0}to * by * none

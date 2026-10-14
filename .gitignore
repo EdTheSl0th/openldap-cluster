@@ -1,0 +1,16 @@
+.DS_Store
+__pycache__/
+*.tar.gz
+.ansible/
+tests/output/
+
+# End-to-end test environment: secrets, state and generated files
+tests/hetzner/.collections/
+tests/hetzner/inventory/hosts.yml
+tests/hetzner/inventory/.secrets/
+tests/hetzner/inventory/.ldap-pki/
+tests/hetzner/terraform/.terraform/
+tests/hetzner/terraform/.ssh/
+tests/hetzner/terraform/terraform.tfstate*
+tests/hetzner/terraform/terraform.tfvars
+.pytest_cache/

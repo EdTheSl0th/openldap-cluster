@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+SLAPD_CONF=
+SLAPD_USER="openldap"
+SLAPD_GROUP="openldap"
+SLAPD_PIDFILE=
+# No wildcard listeners: node address, shared IP and the local socket only.
+# Informational only: slapd is started by /etc/systemd/system/slapd.service.
+SLAPD_SERVICES="{{ _ldap_listeners }}"
+SLAPD_SENTINEL_FILE=/etc/ldap/noslapd
+SLAPD_OPTIONS=""

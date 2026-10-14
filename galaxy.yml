@@ -1,0 +1,34 @@
+namespace: openldap
+name: cluster
+version: 1.0.0
+readme: README.md
+authors:
+  - openldap.cluster contributors
+description: >-
+  Highly available, hardened OpenLDAP (slapd) multi-provider cluster with
+  role-based access control and SSSD clients for Debian 12/13
+license:
+  - GPL-3.0-or-later
+tags: [ldap, openldap, slapd, sssd, keepalived, debian, security, identity]
+dependencies:
+  community.general: ">=9.0.0"
+  community.crypto: ">=2.0.0"
+  ansible.posix: ">=1.5.0"
+repository: https://github.com/EdTheSl0th/openldap-cluster
+documentation: https://github.com/EdTheSl0th/openldap-cluster#readme
+homepage: https://github.com/EdTheSl0th/openldap-cluster
+issues: https://github.com/EdTheSl0th/openldap-cluster/issues
+build_ignore:
+  - .git
+  - .github
+  - .gitignore
+  - .ansible-lint
+  - .ansible
+  - Makefile
+  - "*.tar.gz"
+  - .DS_Store
+  - "**/.DS_Store"
+  - .pytest_cache
+  - "**/__pycache__"
+  - tests/hetzner
+  - tests/output

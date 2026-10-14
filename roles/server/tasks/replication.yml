@@ -1,0 +1,28 @@
+---
+# Multi-provider: every node pulls from every peer (refreshAndPersist over
+# ldaps with certificate verification). Peers are known from the inventory, so
+# each node can be deployed on its own; unreachable peers are retried forever.
+- name: Syncrepl to all peers
+  community.general.ldap_attrs:
+    dn: olcDatabase={1}mdb,cn=config
+    state: exact
+    ordered: true
+    attributes:
+      olcSyncrepl: "{{ _syncrepl }}"
+      olcMultiProvider: "{{ 'TRUE' if _syncrepl else 'FALSE' }}"
+  vars:
+    _syncrepl: >-
+      {%- set out = [] -%}
+      {%- for peer in _ldap_peers -%}
+      {%- set pid = (groups[ldap_servers_group] | sort).index(peer) + 1 -%}
+      {%- set _ = out.append(
+            'rid=%03d provider=ldaps://%s:636 bindmethod=simple timeout=3 network-timeout=5 '
+            'binddn="%s" credentials="%s" keepalive=30:3:10 starttls=no '
+            'tls_cacert="%s/ca.crt" tls_reqcert=demand tls_protocol_min=3.4 '
+            'filter="(objectclass=*)" searchbase="%s" scope=sub attrs="*,+" '
+            'schemachecking=off type=refreshAndPersist retry="5 5 60 +"'
+            | format(pid, _ldap_peer_addr[peer],
+                     ldap_dn_replicator, _ldap_replicator_pw, ldap_tls_dir, ldap_suffix)) -%}
+      {%- endfor -%}
+      {{ out }}
+  no_log: true

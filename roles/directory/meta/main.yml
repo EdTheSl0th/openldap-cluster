@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: openldap.cluster contributors
+  description: Users, groups, roles, host access and sudo rules in OpenLDAP
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Debian
+      versions: [bookworm, trixie]
+dependencies: []

@@ -1,0 +1,106 @@
+---
+# Update without data loss. Run with the change set:
+#   ansible-playbook playbooks/test_update.yml -e @playbooks/vars/update_change.yml
+- name: State before the update
+  hosts: ldap_servers
+  become: true
+  gather_facts: false
+  vars: &search
+    suffix: "{{ ldap_domain | openldap.cluster.suffix_from_domain }}"
+    search: ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:///
+  tasks:
+    - name: Entries and UUIDs
+      ansible.builtin.command: '{{ search }} -b "{{ suffix }}" "(objectClass=*)" entryUUID'
+      register: before
+      changed_when: false
+
+- name: Rolling update (backup, upgrade, reconfigure, verify)
+  ansible.builtin.import_playbook: openldap.cluster.update
+
+- name: Directory content
+  ansible.builtin.import_playbook: openldap.cluster.directory
+
+- name: Clients
+  ansible.builtin.import_playbook: openldap.cluster.client
+
+- name: State after the update
+  hosts: ldap_servers
+  become: true
+  gather_facts: false
+  vars: *search
+  tasks:
+    - name: Entries and UUIDs
+      ansible.builtin.command: '{{ search }} -b "{{ suffix }}" "(objectClass=*)" entryUUID'
+      register: after
+      until: _n_after == _n_before + (0 if 'uid=erin,' in before.stdout else 4)
+      vars:
+        _n_before: "{{ before.stdout_lines | select('match', '^entryUUID') | list | length }}"
+        _n_after: "{{ after.stdout_lines | select('match', '^entryUUID') | list | length }}"
+      retries: 10
+      delay: 2
+      changed_when: false
+
+    - name: No existing entry was lost or recreated
+      ansible.builtin.assert:
+        that: _old | difference(_new) | length == 0
+        fail_msg: "Missing/recreated: {{ _old | difference(_new) }}"
+        quiet: true
+      vars:
+        _old: "{{ before.stdout_lines | select('match', '^entryUUID') | list }}"
+        _new: "{{ after.stdout_lines | select('match', '^entryUUID') | list }}"
+
+    - name: New settings are active on every node
+      ansible.builtin.command: '{{ search }} -b "{{ item.base }}" -s base {{ item.attr }}'
+      register: _r
+      changed_when: false
+      failed_when: item.expect not in _r.stdout
+      loop:
+        - { base: "cn=default,ou=policies,{{ suffix }}", attr: pwdMinLength, expect: "pwdMinLength: 14" }
+        - { base: "olcDatabase={1}mdb,cn=config", attr: olcDbIndex, expect: "olcDbIndex: givenName,sn eq,sub" }
+        - { base: "uid=erin,ou=people,{{ suffix }}", attr: uid, expect: "uid: erin" }
+
+    - name: Backups were written
+      ansible.builtin.find:
+        paths: /var/backups/slapd
+        patterns: "*-data.ldif.gz"
+      register: _b
+      failed_when: _b.matched == 0
+
+- name: Clients after the update
+  hosts: ldap_clients
+  become: true
+  gather_facts: false
+  vars:
+    suffix: "{{ ldap_domain | openldap.cluster.suffix_from_domain }}"
+  tasks:
+    - name: Self-service password of dave survived the update
+      ansible.builtin.command: >-
+        ldapwhoami -x -H ldaps://{{ ldap_vip }} -D "uid=dave,ou=people,{{ suffix }}"
+        -w "{{ ldap_secret_seed | openldap.cluster.derive_password('user:dave:selfservice', 24) }}"
+      changed_when: false
+      no_log: true
+
+    - name: Flush SSSD cache
+      ansible.builtin.command: sss_cache -E
+      changed_when: false
+
+    - name: New user logs in with the new role
+      ansible.builtin.command: pamtester login erin authenticate acct_mgmt
+      args:
+        stdin: "{{ ldap_secret_seed | openldap.cluster.derive_password('user:erin', 24) }}"
+      changed_when: false
+      no_log: true
+
+    # Sudo rules otherwise arrive with the next smart refresh (ldap_client_sudo_refresh).
+    - name: Refresh SSSD now
+      ansible.builtin.systemd_service:
+        name: sssd
+        state: restarted
+
+    - name: New role's groups and sudo rule
+      ansible.builtin.shell: id -nG erin && sudo -l -U erin
+      register: _r
+      changed_when: false
+      until: "'support' in _r.stdout and 'NOPASSWD: /usr/bin/journalctl' in _r.stdout"
+      retries: 10
+      delay: 3

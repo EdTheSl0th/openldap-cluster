@@ -1,0 +1,12 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Run by keepalived when this node becomes VRRP master for {{ ldap_ha_vip }}.
+rc=0
+{% if ldap_ha_provider == 'hetzner' %}
+/usr/bin/python3 /usr/local/libexec/ldap-ha/hetzner-failover || rc=1
+{% endif %}
+{% for cmd in ldap_ha_notify_master %}
+{{ cmd }} || rc=1
+{% endfor %}
+logger -t ldap-ha "MASTER for {{ ldap_ha_vip }} (provider {{ ldap_ha_provider }}, rc=$rc)"
+exit $rc

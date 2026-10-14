@@ -1,0 +1,41 @@
+---
+- name: Database settings, indexes, limits and ACLs
+  community.general.ldap_attrs:
+    dn: olcDatabase={1}mdb,cn=config
+    state: exact
+    ordered: "{{ item.ordered | default(false) }}"
+    attributes: "{{ item.attributes }}"
+  loop:
+    - attributes:
+        olcDbMaxSize: "{{ ldap_db_max_size }}"
+        olcDbIndex: "{{ ldap_indexes }}"
+        olcSizeLimit: "{{ ldap_size_limit }}"
+        olcTimeLimit: "{{ ldap_time_limit }}"
+    - attributes:
+        olcAccess: "{{ ldap_acl }}"
+        olcLimits: "{{ ldap_limits }}"
+      ordered: true
+  loop_control:
+    label: "{{ item.attributes.keys() | list }}"
+
+# Overlays keep a fixed index so the DNs stay stable across runs.
+- name: Overlays
+  community.general.ldap_entry:
+    dn: "olcOverlay={{ '{' ~ idx ~ '}' ~ item.name }},olcDatabase={1}mdb,cn=config"
+    objectClass: [olcOverlayConfig, "{{ item.class }}"]
+    attributes: "{{ item.attrs }}"
+  loop: "{{ _ldap_overlays }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item.name }}"
+
+- name: Overlay settings
+  community.general.ldap_attrs:
+    dn: "olcOverlay={{ '{' ~ idx ~ '}' ~ item.name }},olcDatabase={1}mdb,cn=config"
+    state: exact
+    ordered: "{{ item.ordered | default(false) }}"
+    attributes: "{{ item.attrs }}"
+  loop: "{{ _ldap_overlays }}"
+  loop_control:
+    index_var: idx
+    label: "{{ item.name }}"

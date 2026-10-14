@@ -1,0 +1,185 @@
+---
+# Failover of the shared IP:
+#   1. slapd dies on the holder  -> standby takes over (health check)
+#   2. old holder recovers       -> IP stays (nopreempt)
+#   3. new holder is powered off -> IP moves back (VRRP timeout)
+#   4. writes during the outage reach the powered-off node after it boots.
+#
+# Works for every ldap_ha_provider: the VIP position is checked on the nodes.
+# Provider "hetzner" additionally checks the alias IP via the API. Client access
+# through the VIP is only checked when the network routes it (test_vip_routed;
+# Hetzner's routed network cannot carry plain VRRP/gratuitous ARP).
+# Powering servers off/on uses the Hetzner API of the test environment.
+- name: Failover test
+  hosts: localhost
+  gather_facts: false
+  vars:
+    servers: "{{ groups['ldap_servers'] | sort }}"
+    client: "{{ groups['ldap_clients'] | first }}"
+    vip: "{{ hostvars[servers[0]].ldap_vip }}"
+    provider: "{{ hostvars[servers[0]].ldap_ha_provider | default('vrrp') }}"
+    vip_routed: "{{ test_vip_routed | default(provider == 'hetzner') | bool }}"
+    suffix: "{{ hostvars[servers[0]].ldap_domain | openldap.cluster.suffix_from_domain }}"
+    api: https://api.hetzner.cloud/v1/servers
+    api_headers:
+      Authorization: "Bearer {{ hostvars[servers[0]].ldap_ha_hetzner_token }}"
+    client_fqdn: "{{ hostvars[client].ldap_client_fqdn }}"
+    client_check: >-
+      ldapwhoami -x -H ldaps://{{ vip }} -D "cn={{ client_fqdn }},ou=hosts,{{ suffix }}"
+      -w "{{ client_fqdn | openldap.cluster.host_password(hostvars[client].ldap_secret_seed) }}"
+    vip_pattern: " {{ vip }}/"
+  tasks:
+    - name: Find the current holder
+      ansible.builtin.command: ip -4 -o addr show
+      delegate_to: "{{ item }}"
+      become: true
+      loop: "{{ servers }}"
+      register: _addrs
+      changed_when: false
+
+    - name: Holder and standby
+      ansible.builtin.set_fact:
+        holder: "{{ _h }}"
+        standby: "{{ servers | reject('eq', _h) | first }}"
+      vars:
+        _h: "{{ (_addrs.results | selectattr('stdout', 'search', vip_pattern) | first).item }}"
+
+    - name: Test mode
+      ansible.builtin.debug:
+        msg: "provider={{ provider }}, holder={{ holder }}, client check via VIP={{ vip_routed }}"
+
+    - name: Client reaches the directory via the shared IP
+      ansible.builtin.command: "{{ client_check }}"
+      delegate_to: "{{ client }}"
+      changed_when: false
+      no_log: true
+      when: vip_routed
+
+    # --- 1. service failure -------------------------------------------------------
+    - name: Stop slapd on {{ holder }}
+      ansible.builtin.systemd_service:
+        name: slapd
+        state: stopped
+      delegate_to: "{{ holder }}"
+      become: true
+
+    - name: Start of outage
+      ansible.builtin.set_fact:
+        t0: "{{ now(utc=true).timestamp() }}"
+
+    - name: Shared IP moves to {{ standby }}
+      ansible.builtin.include_tasks: tasks/vip_moved.yml
+      vars:
+        new_holder: "{{ standby }}"
+        old_holder: "{{ holder }}"
+        old_holder_up: true
+
+    - name: Failover time (service failure)
+      ansible.builtin.debug:
+        msg: "Shared IP usable on {{ standby }} after {{ (now(utc=true).timestamp() - t0 | float) | round(1) }} s"
+
+    - name: Users still resolve on the client (fresh lookup, no cache)
+      ansible.builtin.shell: sss_cache -E && id alice
+      delegate_to: "{{ client }}"
+      become: true
+      changed_when: false
+
+    # --- 2. recovery without preemption -------------------------------------------
+    - name: Start slapd again on {{ holder }}
+      ansible.builtin.systemd_service:
+        name: slapd
+        state: started
+      delegate_to: "{{ holder }}"
+      become: true
+
+    - name: Give VRRP time to (not) preempt
+      ansible.builtin.wait_for:
+        timeout: 15
+
+    - name: Shared IP stays (nopreempt) on {{ standby }}
+      ansible.builtin.command: ip -4 -o addr show
+      delegate_to: "{{ standby }}"
+      become: true
+      register: _a
+      changed_when: false
+      failed_when: vip_pattern not in _a.stdout
+
+    # --- 3. hard failure of the new holder -------------------------------------------
+    - name: Hard power-off of {{ standby }}
+      ansible.builtin.uri:
+        url: "{{ api }}/{{ hostvars[standby].hcloud_server_id }}/actions/poweroff"
+        method: POST
+        headers: "{{ api_headers }}"
+        status_code: [200, 201]
+      no_log: true
+
+    - name: Start of outage
+      ansible.builtin.set_fact:
+        t0: "{{ now(utc=true).timestamp() }}"
+
+    - name: Shared IP moves back to {{ holder }}
+      ansible.builtin.include_tasks: tasks/vip_moved.yml
+      vars:
+        new_holder: "{{ holder }}"
+        old_holder: "{{ standby }}"
+        old_holder_up: false
+
+    - name: Failover time (server down)
+      ansible.builtin.debug:
+        msg: "Shared IP usable on {{ holder }} after {{ (now(utc=true).timestamp() - t0 | float) | round(1) }} s"
+
+    - name: Write during the outage
+      ansible.builtin.command:
+        cmd: ldapadd -Q -Y EXTERNAL -H ldapi:///
+        stdin: |
+          dn: cn=outage-marker,ou=system,{{ suffix }}
+          objectClass: device
+          cn: outage-marker
+      delegate_to: "{{ holder }}"
+      become: true
+      changed_when: true
+
+    # --- 4. recovery ------------------------------------------------------------------------
+    - name: Power on {{ standby }}
+      ansible.builtin.uri:
+        url: "{{ api }}/{{ hostvars[standby].hcloud_server_id }}/actions/poweron"
+        method: POST
+        headers: "{{ api_headers }}"
+        status_code: [200, 201]
+      no_log: true
+
+    - name: Wait for {{ standby }}
+      ansible.builtin.wait_for:
+        host: "{{ hostvars[standby].ansible_host }}"
+        port: 22
+        delay: 10
+        timeout: 300
+
+    - name: Outage write was replicated to {{ standby }}
+      ansible.builtin.command: >-
+        ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -s base -b "cn=outage-marker,ou=system,{{ suffix }}" dn
+      delegate_to: "{{ standby }}"
+      become: true
+      register: _m
+      until: _m.rc == 0
+      retries: 30
+      delay: 3
+      changed_when: false
+
+    - name: After the reboot the shared IP stays on {{ holder }}
+      ansible.builtin.command: ip -4 -o addr show
+      delegate_to: "{{ item.host }}"
+      become: true
+      register: _a
+      changed_when: false
+      failed_when: (vip_pattern in _a.stdout) != item.has
+      loop:
+        - { host: "{{ holder }}", has: true }
+        - { host: "{{ standby }}", has: false }
+
+    - name: Remove the marker
+      ansible.builtin.command: >-
+        ldapdelete -Q -Y EXTERNAL -H ldapi:/// "cn=outage-marker,ou=system,{{ suffix }}"
+      delegate_to: "{{ holder }}"
+      become: true
+      changed_when: true

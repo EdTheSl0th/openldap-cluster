@@ -1,0 +1,9 @@
+---
+- name: Restart sssd
+  ansible.builtin.systemd_service:
+    name: sssd
+    state: restarted
+
+- name: Update CA store
+  ansible.builtin.command: update-ca-certificates
+  changed_when: true

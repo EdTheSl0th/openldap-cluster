@@ -1,0 +1,50 @@
+---
+- name: Validate input
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Debian'
+      - ansible_facts.distribution_major_version | int in [12, 13]
+      - ldap_secret_seed is defined and ldap_secret_seed | length >= 32
+      - inventory_hostname in groups[ldap_servers_group]
+    fail_msg: >-
+      openldap.cluster.server needs Debian 12/13, ldap_secret_seed (>= 32 chars)
+      and the host in group '{{ ldap_servers_group }}'.
+    quiet: true
+
+- name: Install packages
+  ansible.builtin.import_tasks: install.yml
+
+- name: TLS certificates
+  ansible.builtin.import_tasks: pki.yml
+  when: not ldap_tls_external | bool
+
+- name: Bootstrap cn=config on a fresh node
+  ansible.builtin.import_tasks: bootstrap.yml
+
+- name: Online configuration via ldapi (SASL EXTERNAL as root)
+  module_defaults:
+    community.general.ldap_attrs: &ldapi
+      server_uri: ldapi:///
+      sasl_class: external
+    community.general.ldap_entry: *ldapi
+    community.general.ldap_passwd: *ldapi
+    community.general.ldap_search: *ldapi
+  block:
+    - name: Global configuration, modules and schemas
+      ansible.builtin.import_tasks: config.yml
+
+    - name: Database, ACLs and overlays
+      ansible.builtin.import_tasks: database.yml
+
+    - name: Replication
+      ansible.builtin.import_tasks: replication.yml
+
+    - name: Base entries and service accounts
+      ansible.builtin.import_tasks: base.yml
+
+- name: Firewall
+  ansible.builtin.import_tasks: firewall.yml
+  when: ldap_firewall_enabled | bool
+
+- name: Backups
+  ansible.builtin.import_tasks: backup.yml

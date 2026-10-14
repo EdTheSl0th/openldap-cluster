@@ -1,0 +1,181 @@
+---
+# --- Identity ---------------------------------------------------------------
+ldap_domain: example.org
+ldap_suffix: "{{ ldap_domain | openldap.cluster.suffix_from_domain }}"
+ldap_organization: "{{ ldap_domain }}"
+
+# Master seed for every derived secret (replicator, client hosts, VRRP).
+# REQUIRED, >= 32 characters, keep it in ansible-vault.
+# ldap_secret_seed:
+
+# --- Cluster ----------------------------------------------------------------
+# Inventory group with all providers. Each node is deployed independently;
+# peers are taken from this group (no facts needed from them).
+ldap_servers_group: ldap_servers
+ldap_server_id: "{{ (groups[ldap_servers_group] | sort).index(inventory_hostname) + 1 }}"
+# Address slapd listens on and peers replicate from. Set it per host in the
+# inventory if the LDAP network is not the default route; peers are resolved
+# without facts via hostvars[peer].ldap_node_address | default(ansible_host).
+ldap_node_address: "{{ ansible_facts.default_ipv4.address }}"
+# Name in the server certificate.
+ldap_node_fqdn: "{{ ansible_facts.fqdn }}"
+# Shared IP (served by openldap.cluster.ha). Empty = no shared IP.
+ldap_vip: ""
+# Networks allowed to reach 389/636 (nftables). Narrow this to the LDAP
+# client network.
+ldap_allowed_networks: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16]
+
+# --- PKI --------------------------------------------------------------------
+# Internal CA lives on the controller; node keys never leave the nodes.
+# Set ldap_tls_external: true and provide the files yourself to use a real CA.
+ldap_tls_external: false
+ldap_pki_dir: "{{ inventory_dir }}/.ldap-pki"
+ldap_pki_ca_name: "{{ ldap_organization }} LDAP CA"
+ldap_tls_dir: /etc/ldap/tls
+ldap_tls_extra_sans: ["DNS:ldap.{{ ldap_domain }}"]
+ldap_tls_cert_days: 825
+# TLS 1.3 only. Debian 12 links slapd against GnuTLS, Debian 13 against
+# OpenSSL; the matching cipher setting is chosen automatically.
+ldap_tls_protocol_min: "3.4"
+ldap_tls_gnutls_priority: "SECURE256:+SECURE128:-VERS-ALL:+VERS-TLS1.3"
+ldap_tls_openssl_ciphers: "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256"
+ldap_tls_openssl_curves: "X25519:P-256:P-384"
+
+# --- Hardening --------------------------------------------------------------
+ldap_password_hash: "{ARGON2}"
+ldap_log_level: stats
+ldap_size_limit: 500
+ldap_time_limit: 60
+ldap_db_max_size: 1073741824
+ldap_firewall_enabled: true
+ldap_firewall_ssh_port: 22
+# Additional nftables rules for the input chain, e.g. ["tcp dport 9100 accept"].
+ldap_firewall_extra_rules: []
+ldap_systemd_hardening: true
+
+# Password policy (cn=default); service accounts use cn=service (no lockout).
+ldap_ppolicy:
+  pwdMinLength: 12
+  pwdInHistory: 5
+  pwdCheckQuality: 1
+  pwdLockout: "TRUE"
+  pwdMaxFailure: 5
+  pwdLockoutDuration: 900
+  pwdFailureCountInterval: 900
+  pwdMaxAge: 0
+  pwdAllowUserChange: "TRUE"
+  pwdMustChange: "FALSE"
+
+# --- Data ---------------------------------------------------------------------
+# Built-in administrative roles referenced by the ACLs (ou=roles).
+ldap_role_admins: ldap-admins
+ldap_role_user_admins: user-admins
+ldap_role_auditors: auditors
+
+ldap_modules: [back_mdb, syncprov, ppolicy, dynlist, unique, argon2]
+ldap_schemas: [cosine, inetorgperson, dyngroup, rfc2307bis, sudo]
+ldap_indexes:
+  - objectClass eq
+  - entryCSN,entryUUID eq
+  - cn,uid eq,sub
+  - uidNumber,gidNumber eq
+  - member eq
+  - mail eq
+  - sudoUser,sudoHost eq,sub
+
+# --- Operations ---------------------------------------------------------------
+ldap_backup_dir: /var/backups/slapd
+ldap_backup_keep_days: 14
+# Run apt upgrade for slapd during deployment (used by the update playbook).
+ldap_upgrade_packages: false
+# Seconds a new node waits for the initial replication before giving up.
+ldap_initial_sync_timeout: 120
+
+# --- DIT layout (shared with the directory and client roles) ------------------
+ldap_dn_people: "ou=people,{{ ldap_suffix }}"
+ldap_dn_groups: "ou=groups,{{ ldap_suffix }}"
+ldap_dn_roles: "ou=roles,{{ ldap_suffix }}"
+ldap_dn_hosts: "ou=hosts,{{ ldap_suffix }}"
+ldap_dn_sudoers: "ou=sudoers,{{ ldap_suffix }}"
+ldap_dn_system: "ou=system,{{ ldap_suffix }}"
+ldap_dn_policies: "ou=policies,{{ ldap_suffix }}"
+ldap_dn_replicator: "cn=replicator,{{ ldap_dn_system }}"
+
+# Access control. Order matters (first match wins). Administrative rights come
+# from membership in the role objects (ou=roles), not from a root password.
+ldap_acl:
+  - >-
+    to dn.subtree="{{ ldap_dn_people }}" attrs=userPassword,shadowLastChange
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" =wx
+    by group/groupOfNames/member.exact="cn={{ ldap_role_user_admins }},{{ ldap_dn_roles }}" =wx
+    by self =wx
+    by anonymous auth
+    by * none
+  - >-
+    to attrs=userPassword
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" =wx
+    by self =wx
+    by anonymous auth
+    by * none
+  - >-
+    to dn.subtree="{{ ldap_dn_people }}" attrs=loginShell,telephoneNumber,mobile
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_user_admins }},{{ ldap_dn_roles }}" write
+    by self write
+    by users read
+  - >-
+    to dn.subtree="{{ ldap_dn_people }}"
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_user_admins }},{{ ldap_dn_roles }}" write
+    by users read
+  - >-
+    to dn.subtree="{{ ldap_dn_groups }}"
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_user_admins }},{{ ldap_dn_roles }}" write
+    by users read
+  - >-
+    to dn.subtree="{{ ldap_dn_sudoers }}"
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_auditors }},{{ ldap_dn_roles }}" read
+    by dn.onelevel="{{ ldap_dn_hosts }}" read
+    by * none
+  - >-
+    to dn.subtree="{{ ldap_dn_hosts }}"
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_auditors }},{{ ldap_dn_roles }}" read
+    by self read
+    by * none
+  - >-
+    to dn.subtree="{{ ldap_dn_roles }}"
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_auditors }},{{ ldap_dn_roles }}" read
+    by * none
+  - >-
+    to dn.subtree="{{ ldap_dn_system }}"
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_auditors }},{{ ldap_dn_roles }}" read
+    by * none
+  - >-
+    to *
+    by dn.base="{{ ldap_dn_replicator }}" read
+    by group/groupOfNames/member.exact="cn={{ ldap_role_admins }},{{ ldap_dn_roles }}" write
+    by group/groupOfNames/member.exact="cn={{ ldap_role_auditors }},{{ ldap_dn_roles }}" read
+    by users read
+    by * none
+
+ldap_limits:
+  - >-
+    dn.exact="{{ ldap_dn_replicator }}"
+    time.soft=unlimited time.hard=unlimited size.soft=unlimited size.hard=unlimited
+  - >-
+    dn.onelevel="{{ ldap_dn_hosts }}"
+    size.soft=unlimited size.hard=unlimited

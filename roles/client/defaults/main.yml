@@ -1,0 +1,38 @@
+---
+ldap_domain: example.org
+ldap_suffix: "{{ ldap_domain | openldap.cluster.suffix_from_domain }}"
+ldap_dn_people: "ou=people,{{ ldap_suffix }}"
+ldap_dn_groups: "ou=groups,{{ ldap_suffix }}"
+ldap_dn_hosts: "ou=hosts,{{ ldap_suffix }}"
+ldap_dn_sudoers: "ou=sudoers,{{ ldap_suffix }}"
+ldap_dn_policies: "ou=policies,{{ ldap_suffix }}"
+ldap_servers_group: ldap_servers
+
+# Every client binds with its own account cn=<fqdn>,ou=hosts. The password is
+# HMAC-SHA256(ldap_secret_seed, "host:<fqdn>"): unique per host, reproducible,
+# never stored anywhere but on the client itself.
+ldap_client_fqdn: "{{ ansible_facts.fqdn }}"
+ldap_client_bind_dn: "cn={{ ldap_client_fqdn }},{{ ldap_dn_hosts }}"
+
+# Shared IP first, single nodes as fallback. Server addresses come from the
+# inventory (ldap_node_address, else ansible_host) - no facts needed.
+ldap_vip: ""
+ldap_client_uri: "ldaps://{{ ldap_vip if ldap_vip | length > 0 else _ldap_server_addr[0] }}"
+ldap_client_backup_uris: "{{ _ldap_server_addr | map('regex_replace', '^(.*)$', 'ldaps://\\1') | list }}"
+
+# The provider the host account is created on (delegated, via ldapi).
+ldap_client_provision_host: "{{ (groups[ldap_servers_group] | sort)[0] }}"
+
+# CA that signed the LDAP server certificates.
+ldap_pki_dir: "{{ inventory_dir }}/.ldap-pki"
+ldap_client_ca_file: "{{ ldap_pki_dir }}/ca.crt"
+
+# Hostgroups (openldap.cluster.directory) this host is part of -> login groups.
+ldap_hostgroups: []
+ldap_client_hostgroups: "{{ ldap_hostgroups | openldap.cluster.host_hostgroups([inventory_hostname, ldap_client_fqdn]) }}"
+
+ldap_client_sudo: true
+# Seconds until changed sudo rules reach the client (SSSD smart refresh).
+ldap_client_sudo_refresh: 300
+ldap_client_mkhomedir: true
+ldap_client_cache_credentials: true

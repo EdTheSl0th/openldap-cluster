@@ -1,0 +1,287 @@
+---
+# End-to-end checks of the deployed cluster from a client's point of view:
+# replication, client binding, RBAC (NSS/PAM/sudo/ACLs) and hardening.
+- name: Replication in both directions
+  hosts: ldap_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Write a marker on every node
+      ansible.builtin.command:
+        cmd: ldapadd -Q -Y EXTERNAL -H ldapi:///
+        stdin: |
+          dn: cn=repltest-{{ inventory_hostname }},ou=system,{{ ldap_domain | openldap.cluster.suffix_from_domain }}
+          objectClass: device
+          cn: repltest-{{ inventory_hostname }}
+      changed_when: true
+
+    - name: Every node sees every marker
+      ansible.builtin.command: >-
+        ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:///
+        -b "ou=system,{{ ldap_domain | openldap.cluster.suffix_from_domain }}" "(cn=repltest-*)" cn
+      register: _markers
+      until: (_markers.stdout_lines | select('match', '^cn:') | list | length) == (groups['ldap_servers'] | length)
+      retries: 10
+      delay: 2
+      changed_when: false
+
+    - name: Remove the markers (deletes replicate too)
+      ansible.builtin.command: >-
+        ldapdelete -Q -Y EXTERNAL -H ldapi:///
+        "cn=repltest-{{ inventory_hostname }},ou=system,{{ ldap_domain | openldap.cluster.suffix_from_domain }}"
+      changed_when: true
+
+    - name: Markers are gone everywhere
+      ansible.builtin.command: >-
+        ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:///
+        -b "ou=system,{{ ldap_domain | openldap.cluster.suffix_from_domain }}" "(cn=repltest-*)" cn
+      register: _markers
+      until: _markers.stdout | length == 0
+      retries: 10
+      delay: 2
+      changed_when: false
+
+    - name: Passwords are stored as Argon2 hashes
+      ansible.builtin.command: >-
+        ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:///
+        -b "ou=people,{{ ldap_domain | openldap.cluster.suffix_from_domain }}" "(uid=alice)" userPassword
+      register: _pw
+      changed_when: false
+      failed_when: "'e0FSR09OMn0k' not in _pw.stdout"  # base64("{ARGON2}$")
+
+- name: Client binding, RBAC and hardening
+  hosts: ldap_clients
+  become: true
+  gather_facts: false
+  vars:
+    suffix: "{{ ldap_domain | openldap.cluster.suffix_from_domain }}"
+    vip: "ldaps://{{ ldap_vip }}"
+    dave_new: "{{ ldap_secret_seed | openldap.cluster.derive_password('user:dave:selfservice', 24) }}"
+    host_dn: "cn={{ ldap_client_fqdn }},ou=hosts,{{ suffix }}"
+    host_pw: "{{ ldap_client_fqdn | openldap.cluster.host_password(ldap_secret_seed) }}"
+    pw: "{{ dict(ldap_users | map(attribute='uid') | zip(ldap_users | map(attribute='password'))) }}"
+    user_dn: "uid=%s,ou=people,{{ suffix }}"
+  tasks:
+    - name: Test tools
+      ansible.builtin.apt:
+        name: [pamtester, ldap-utils, openssl]
+        state: present
+
+    # --- deterministic, unique host password ------------------------------------
+    - name: Host password is unique per host and reproducible
+      ansible.builtin.assert:
+        that:
+          - host_pw == (ldap_client_fqdn | openldap.cluster.host_password(ldap_secret_seed))
+          - host_pw != ('other.' ~ ldap_client_fqdn) | openldap.cluster.host_password(ldap_secret_seed)
+          - host_pw | length >= 40
+        quiet: true
+
+    - name: Host account binds through the shared IP
+      ansible.builtin.command: ldapwhoami -x -H {{ vip }} -D "{{ host_dn }}" -w "{{ host_pw }}"
+      register: _r
+      changed_when: false
+      failed_when: _r.stdout != 'dn:' ~ host_dn
+      no_log: true
+
+    - name: Wrong host password is rejected
+      ansible.builtin.command: ldapwhoami -x -H {{ vip }} -D "{{ host_dn }}" -w wrong
+      register: _r
+      changed_when: false
+      failed_when: _r.rc != 49
+
+    # --- NSS: roles expand to unix groups ------------------------------------
+    - name: Flush SSSD cache
+      ansible.builtin.command: sss_cache -E
+      changed_when: false
+
+    - name: Group membership from roles
+      ansible.builtin.command: id -nG {{ item.user }}
+      register: _r
+      changed_when: false
+      failed_when: (_r.stdout.split() | sort) != (item.groups | sort)
+      loop:
+        - { user: alice, groups: [ldapusers, access-all-servers, operations, developers, logreaders] }
+        - { user: bob, groups: [ldapusers, developers, access-app] }
+        - { user: carol, groups: [ldapusers, dbadmins, access-db] }
+        - { user: dave, groups: [ldapusers, logreaders] }
+
+    # --- PAM: authentication + host access by role -------------------------------
+    - name: Login allowed for users with access to this host
+      ansible.builtin.command: pamtester login {{ item }} authenticate acct_mgmt open_session close_session
+      args:
+        stdin: "{{ pw[item] }}"
+      loop: [alice, bob]
+      changed_when: false
+      no_log: true
+
+    - name: Wrong password is rejected
+      ansible.builtin.command: pamtester login bob authenticate
+      args:
+        stdin: definitely-wrong
+      register: _r
+      changed_when: false
+      failed_when: _r.rc == 0
+
+    - name: User without a role for this host authenticates ...
+      ansible.builtin.command: pamtester login carol authenticate
+      args:
+        stdin: "{{ pw.carol }}"
+      changed_when: false
+      no_log: true
+
+    - name: ... but is denied access
+      ansible.builtin.command: pamtester login carol acct_mgmt
+      register: _r
+      changed_when: false
+      failed_when: _r.rc == 0
+
+    - name: Home directory was created on login
+      ansible.builtin.stat:
+        path: /home/alice
+      register: _home
+      failed_when: not _home.stat.exists
+
+    # --- sudo from LDAP ------------------------------------------------------------
+    - name: Sudo rules per role
+      ansible.builtin.command: sudo -l -U {{ item.user }}
+      register: _r
+      changed_when: false
+      failed_when: item.expect not in _r.stdout
+      loop:
+        - { user: alice, expect: "(ALL) ALL" }
+        - { user: bob, expect: "NOPASSWD: /usr/bin/systemctl restart nginx" }
+        - { user: carol, expect: "not allowed to run sudo" }
+
+    # --- hardening ----------------------------------------------------------------
+    - name: Anonymous access is refused
+      ansible.builtin.command: ldapsearch -x -LLL -H {{ vip }} -b "{{ suffix }}" -s base
+      register: _r
+      changed_when: false
+      failed_when: _r.rc == 0
+
+    - name: Simple bind without TLS is refused (confidentiality required)
+      ansible.builtin.command: ldapwhoami -x -H ldap://{{ ldap_vip }} -D "{{ host_dn }}" -w "{{ host_pw }}"
+      register: _r
+      changed_when: false
+      failed_when: _r.rc != 13
+      no_log: true
+
+    - name: StartTLS on 389 works
+      ansible.builtin.command: ldapwhoami -x -ZZ -H ldap://{{ ldap_vip }} -D "{{ host_dn }}" -w "{{ host_pw }}"
+      changed_when: false
+      no_log: true
+
+    - name: TLS 1.2 is refused, TLS 1.3 with a valid certificate works
+      ansible.builtin.shell: >-
+        openssl s_client -connect {{ ldap_vip }}:636 {{ item.flag }} -verify_return_error
+        -CAfile /usr/local/share/ca-certificates/ldap-ca.crt -verify_ip {{ ldap_vip }} </dev/null
+      register: _r
+      changed_when: false
+      failed_when: (_r.rc == 0) != item.ok
+      loop:
+        - { flag: -tls1_2, ok: false }
+        - { flag: -tls1_3, ok: true }
+
+    - name: Host account cannot read password hashes
+      ansible.builtin.command: >-
+        ldapsearch -x -LLL -H {{ vip }} -D "{{ host_dn }}" -w "{{ host_pw }}"
+        -b "{{ user_dn | format('alice') }}" userPassword
+      register: _r
+      changed_when: false
+      failed_when: _r.rc != 0 or 'userPassword' in _r.stdout
+      no_log: true
+
+    - name: Host account cannot see roles or other hosts
+      ansible.builtin.command: >-
+        ldapsearch -x -LLL -H {{ vip }} -D "{{ host_dn }}" -w "{{ host_pw }}"
+        -b "{{ item }},{{ suffix }}" -s one dn
+      register: _r
+      changed_when: false
+      failed_when: _r.stdout | length > 0
+      loop: [ou=roles, ou=system]
+      no_log: true
+
+    # --- directory permissions by role ----------------------------------------------
+    # dave's password may already be the self-service one from an earlier run.
+    - name: Current password of dave
+      ansible.builtin.command: >-
+        ldapwhoami -x -H {{ vip }} -D "{{ user_dn | format('dave') }}" -w "{{ dave_new }}"
+      register: _dave
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Use it for the permission tests
+      ansible.builtin.set_fact:
+        pw: "{{ pw | combine({'dave': dave_new}) if _dave.rc == 0 else pw }}"
+      no_log: true
+
+    - name: Directory write permissions follow the roles
+      ansible.builtin.command:
+        cmd: ldapmodify -x -H {{ vip }} -D "{{ user_dn | format(item.who) }}" -w "{{ pw[item.who] }}"
+        stdin: |
+          dn: {{ item.dn }}
+          changetype: modify
+          replace: description
+          description: rbac test by {{ item.who }}
+      register: _r
+      changed_when: false
+      failed_when: (_r.rc == 0) != item.ok
+      loop:
+        - { who: alice, dn: "cn=app-developer-0,ou=sudoers,{{ suffix }}", ok: true }    # ldap-admins
+        - { who: dave, dn: "uid=bob,ou=people,{{ suffix }}", ok: true }                 # user-admins
+        - { who: dave, dn: "cn=app-developer-0,ou=sudoers,{{ suffix }}", ok: false }
+        - { who: dave, dn: "cn=ldap-admins,ou=roles,{{ suffix }}", ok: false }
+        - { who: bob, dn: "uid=carol,ou=people,{{ suffix }}", ok: false }               # plain user
+        - { who: bob, dn: "cn=ldap-admins,ou=roles,{{ suffix }}", ok: false }
+      loop_control:
+        label: "{{ item.who }} -> {{ item.dn }}"
+      no_log: true
+
+    - name: Auditors read roles, plain users do not
+      ansible.builtin.command: >-
+        ldapsearch -x -LLL -H {{ vip }} -D "{{ user_dn | format(item.who) }}" -w "{{ pw[item.who] }}"
+        -b "ou=roles,{{ suffix }}" -s one dn
+      register: _r
+      changed_when: false
+      failed_when: (_r.stdout | length > 0) != item.visible
+      loop:
+        - { who: dave, visible: true }
+        - { who: bob, visible: false }
+      loop_control:
+        label: "{{ item.who }}"
+      no_log: true
+
+    # dave keeps this password: later directory runs must not reset it.
+    - name: Users can change their own password (self-service)
+      ansible.builtin.shell: >-
+        ldapwhoami -x -H {{ vip }} -D "{{ user_dn | format('dave') }}" -w "{{ dave_new }}" ||
+        ldappasswd -x -H {{ vip }} -D "{{ user_dn | format('dave') }}" -w "{{ pw.dave }}"
+        -a "{{ pw.dave }}" -s "{{ dave_new }}"
+      changed_when: false
+      no_log: true
+
+    - name: Password policy rejects short passwords
+      ansible.builtin.command: >-
+        ldappasswd -x -H {{ vip }} -D "{{ user_dn | format('bob') }}" -w "{{ pw.bob }}"
+        -a "{{ pw.bob }}" -s short
+      register: _r
+      changed_when: false
+      failed_when: _r.rc == 0
+      no_log: true
+
+    - name: Restore descriptions changed by the test
+      ansible.builtin.command:
+        cmd: ldapmodify -x -H {{ vip }} -D "{{ user_dn | format('alice') }}" -w "{{ pw.alice }}"
+        stdin: |
+          dn: cn=app-developer-0,ou=sudoers,{{ suffix }}
+          changetype: modify
+          replace: description
+          description: Generated from role app-developer
+          -
+
+          dn: uid=bob,ou=people,{{ suffix }}
+          changetype: modify
+          delete: description
+      changed_when: false
+      no_log: true

@@ -1,0 +1,112 @@
+---
+- name: Validate input
+  ansible.builtin.assert:
+    that:
+      - ldap_secret_seed is defined and ldap_secret_seed | length >= 32
+      - groups[ldap_servers_group] | default([]) | length > 0
+    fail_msg: openldap.cluster.client needs ldap_secret_seed and the LDAP servers in the inventory.
+    quiet: true
+
+- name: Host account on the directory
+  delegate_to: "{{ ldap_client_provision_host }}"
+  module_defaults:
+    community.general.ldap_attrs: &ldapi
+      server_uri: ldapi:///
+      sasl_class: external
+    community.general.ldap_entry: *ldapi
+    community.general.ldap_passwd: *ldapi
+  block:
+    - name: Create host account
+      community.general.ldap_entry:
+        dn: "{{ ldap_client_bind_dn }}"
+        objectClass: [device, simpleSecurityObject]
+        attributes:
+          userPassword: "{{ _ldap_host_pw }}"
+      no_log: true
+
+    - name: Host account attributes
+      community.general.ldap_attrs:
+        dn: "{{ ldap_client_bind_dn }}"
+        state: exact
+        attributes:
+          description: "Bind account of {{ inventory_hostname }}"
+          pwdPolicySubentry: "cn=service,{{ ldap_dn_policies }}"
+
+    - name: Host account password (bind check, set only on mismatch)
+      community.general.ldap_passwd:
+        dn: "{{ ldap_client_bind_dn }}"
+        passwd: "{{ _ldap_host_pw }}"
+      no_log: true
+
+- name: Install SSSD
+  ansible.builtin.apt:
+    name: "{{ ['sssd-ldap', 'sssd-tools', 'libnss-sss', 'libpam-sss', 'ldap-utils', 'ca-certificates']
+              + (['libsss-sudo', 'sudo'] if ldap_client_sudo | bool else []) }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    install_recommends: false
+
+- name: Trust the LDAP CA
+  ansible.builtin.copy:
+    src: "{{ ldap_client_ca_file }}"
+    dest: /usr/local/share/ca-certificates/ldap-ca.crt
+    mode: "0644"
+  notify: Update CA store
+
+- name: OpenLDAP client directory
+  ansible.builtin.file:
+    path: /etc/ldap
+    state: directory
+    mode: "0755"
+
+- name: Defaults for ldap-utils
+  ansible.builtin.copy:
+    dest: /etc/ldap/ldap.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible (openldap.cluster)
+      BASE {{ ldap_suffix }}
+      URI {{ ([ldap_client_uri] + ldap_client_backup_uris) | join(' ') }}
+      TLS_CACERT /usr/local/share/ca-certificates/ldap-ca.crt
+      TLS_REQCERT demand
+      TLS_PROTOCOL_MIN 3.4
+
+- name: SSSD configuration
+  ansible.builtin.template:
+    src: sssd.conf.j2
+    dest: /etc/sssd/sssd.conf
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart sssd
+
+- name: Name service switch uses SSSD
+  ansible.builtin.lineinfile:
+    path: /etc/nsswitch.conf
+    regexp: '^{{ item }}:'
+    line: "{{ item }}:{{ ' ' * (16 - item | length) }}files sss"
+  loop: "{{ ['passwd', 'group', 'shadow'] + (['sudoers'] if ldap_client_sudo | bool else []) }}"
+
+- name: Home directories on first login
+  when: ldap_client_mkhomedir | bool
+  block:
+    - name: Check PAM session stack
+      ansible.builtin.command: grep -q pam_mkhomedir /etc/pam.d/common-session
+      register: _mkhomedir
+      changed_when: false
+      failed_when: _mkhomedir.rc > 1
+
+    - name: Enable pam_mkhomedir
+      ansible.builtin.command: pam-auth-update --enable mkhomedir
+      changed_when: true
+      when: _mkhomedir.rc == 1
+
+- name: Start SSSD
+  ansible.builtin.systemd_service:
+    name: sssd
+    state: started
+    enabled: true
+
+- name: Apply configuration now
+  ansible.builtin.meta: flush_handlers

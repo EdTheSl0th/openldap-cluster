@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+hcloud_token = "YOUR-HETZNER-CLOUD-API-TOKEN"   # or export TF_VAR_hcloud_token
+admin_ips    = ["198.51.100.23"]                  # your public IP(s), SSH access
+
+# LDAP test cluster: 2 providers + 1 client ("debian-12" or "debian-13").
+default_image       = "debian-12"
+default_server_type = "cx23"
+
+vms = {
+  ldap1   = { groups = ["ldap_servers"] }
+  ldap2   = { groups = ["ldap_servers"] }
+  client1 = { groups = ["ldap_clients"] }
+}

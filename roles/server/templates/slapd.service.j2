@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+# Native unit replacing the LSB script: systemd stops slapd via its cgroup, so
+# the service can run with a minimal capability set.
+[Unit]
+Description=OpenLDAP server (openldap.cluster)
+Documentation=man:slapd(8) man:slapd-config(5)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=forking
+PIDFile=/run/slapd/slapd.pid
+RemainAfterExit=no
+ExecStart=/usr/sbin/slapd -h "{{ _ldap_listeners }}" -g openldap -u openldap -F /etc/ldap/slapd.d
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

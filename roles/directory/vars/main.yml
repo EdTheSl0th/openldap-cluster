@@ -1,0 +1,24 @@
+---
+_placeholder: "cn=nobody,{{ ldap_dn_system }}"
+_builtin_roles:
+  - { name: "{{ ldap_role_admins }}", description: Full write access to the directory }
+  - { name: "{{ ldap_role_user_admins }}", description: "Manage people and groups, reset passwords" }
+  - { name: "{{ ldap_role_auditors }}", description: Read access to everything except passwords }
+_all_roles: >-
+  {{ _builtin_roles | rejectattr('name', 'in', ldap_roles | map(attribute='name') | list) | list + ldap_roles }}
+_users_absent: "{{ ldap_users | selectattr('state', 'defined') | selectattr('state', 'eq', 'absent') | list }}"
+_users_present: "{{ ldap_users | reject('in', _users_absent) | list }}"
+_rbac: "{{ ldap_users | openldap.cluster.rbac_expand(_all_roles, ldap_groups, ldap_hostgroups) }}"
+# Primary group, posix groups and one login group per hostgroup, with members.
+_groups: >-
+  {%- set out = [{'name': ldap_users_group, 'gid': ldap_users_gid,
+                  'description': 'Primary group of directory users', 'members': []}] -%}
+  {%- for g in ldap_groups -%}
+  {%- set _ = out.append(g | combine({'members': _rbac.groups[g.name]})) -%}
+  {%- endfor -%}
+  {%- for h in ldap_hostgroups -%}
+  {%- set _ = out.append({'name': 'access-' ~ h.name, 'gid': h.gid,
+                          'description': 'Login permission on hostgroup ' ~ h.name,
+                          'members': _rbac.access[h.name]}) -%}
+  {%- endfor -%}
+  {{ out }}

@@ -1,0 +1,125 @@
+---
+# A fresh node must not create its own base entries while a peer holds data:
+# the same DNs with different entryUUIDs would collide. So: if a peer is
+# reachable, wait for the initial refresh; only seed when alone (or, as the
+# node with the lowest server ID, when the peers stay empty).
+- name: Look for replicated data
+  ansible.builtin.command: >-
+    ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -s base -b "{{ ldap_dn_replicator }}" dn
+  register: _ldap_seeded
+  failed_when: _ldap_seeded.rc not in [0, 32]
+  changed_when: false
+
+- name: Initial synchronisation
+  when: _ldap_seeded.rc == 32
+  vars:
+    _ldap_lowest: "{{ ldap_server_id | int == 1 }}"
+  block:
+    - name: Probe peers
+      ansible.builtin.wait_for:
+        host: "{{ _ldap_peer_addr[item] }}"
+        port: 636
+        timeout: 3
+      loop: "{{ _ldap_peers }}"
+      register: _ldap_peer_probe
+      failed_when: false
+
+    - name: Wait for data from peers
+      ansible.builtin.command: >-
+        ldapsearch -Q -LLL -Y EXTERNAL -H ldapi:/// -s base -b "{{ ldap_dn_replicator }}" dn
+      register: _ldap_synced
+      until: _ldap_synced.rc == 0
+      retries: "{{ ((30 if _ldap_lowest else ldap_initial_sync_timeout) | int / 5) | int }}"
+      delay: 5
+      failed_when: false
+      changed_when: false
+      when: _ldap_peer_probe.results | selectattr('state', 'defined') | list | length > 0
+
+    - name: Refuse to seed next to a reachable peer
+      ansible.builtin.fail:
+        msg: >-
+          Peers are reachable but nothing was replicated within the timeout.
+          Check the replicator account and TLS on the peers.
+      when:
+        - _ldap_synced.rc | default(32) != 0
+        - _ldap_synced is not skipped
+        - not _ldap_lowest
+
+- name: Base entries
+  community.general.ldap_entry:
+    dn: "{{ item.dn }}"
+    objectClass: "{{ item.oc }}"
+    attributes: "{{ item.attrs | default({}) }}"
+  loop:
+    - dn: "{{ ldap_suffix }}"
+      oc: [top, dcObject, organization]
+      attrs:
+        dc: "{{ ldap_suffix.split(',')[0].split('=')[1] }}"
+        o: "{{ ldap_organization }}"
+    - { dn: "{{ ldap_dn_people }}", oc: [organizationalUnit] }
+    - { dn: "{{ ldap_dn_groups }}", oc: [organizationalUnit] }
+    - { dn: "{{ ldap_dn_roles }}", oc: [organizationalUnit] }
+    - { dn: "{{ ldap_dn_hosts }}", oc: [organizationalUnit] }
+    - { dn: "{{ ldap_dn_sudoers }}", oc: [organizationalUnit] }
+    - { dn: "{{ ldap_dn_system }}", oc: [organizationalUnit] }
+    - { dn: "{{ ldap_dn_policies }}", oc: [organizationalUnit] }
+    - dn: "cn=default,{{ ldap_dn_policies }}"
+      oc: [device, pwdPolicy]
+      attrs: { pwdAttribute: userPassword }
+    - dn: "cn=service,{{ ldap_dn_policies }}"
+      oc: [device, pwdPolicy]
+      attrs: { pwdAttribute: userPassword }
+  loop_control:
+    label: "{{ item.dn }}"
+
+- name: Password policies
+  community.general.ldap_attrs:
+    dn: "cn={{ item.name }},{{ ldap_dn_policies }}"
+    state: exact
+    attributes: "{{ item.attrs }}"
+  loop:
+    - name: default
+      attrs: "{{ ldap_ppolicy }}"
+    - name: service
+      attrs:
+        pwdMinLength: 32
+        pwdLockout: "FALSE"
+        pwdMaxAge: 0
+        pwdAllowUserChange: "FALSE"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Role objects referenced by the ACLs. Members are managed by openldap.cluster.directory;
+# groupOfNames requires a member, the placeholder DN never exists.
+- name: Administrative role objects
+  community.general.ldap_entry:
+    dn: "cn={{ item }},{{ ldap_dn_roles }}"
+    objectClass: [groupOfNames]
+    attributes:
+      member: "cn=nobody,{{ ldap_dn_system }}"
+  loop:
+    - "{{ ldap_role_admins }}"
+    - "{{ ldap_role_user_admins }}"
+    - "{{ ldap_role_auditors }}"
+
+- name: Replicator account
+  community.general.ldap_entry:
+    dn: "{{ ldap_dn_replicator }}"
+    objectClass: [applicationProcess, simpleSecurityObject]
+    attributes:
+      userPassword: "{{ _ldap_replicator_pw }}"
+      description: Replication between LDAP providers
+  no_log: true
+
+- name: Replicator password policy
+  community.general.ldap_attrs:
+    dn: "{{ ldap_dn_replicator }}"
+    state: exact
+    attributes:
+      pwdPolicySubentry: "cn=service,{{ ldap_dn_policies }}"
+
+- name: Replicator password (bind check, set only on mismatch)
+  community.general.ldap_passwd:
+    dn: "{{ ldap_dn_replicator }}"
+    passwd: "{{ _ldap_replicator_pw }}"
+  no_log: true

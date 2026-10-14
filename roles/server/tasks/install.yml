@@ -1,0 +1,76 @@
+---
+# Debian's own initial configuration is skipped on purpose: cn=config is
+# bootstrapped by this role and afterwards only modified online.
+- name: Skip Debian's slapd default configuration
+  ansible.builtin.debconf:
+    name: slapd
+    question: slapd/no_configuration
+    vtype: boolean
+    value: "true"
+
+- name: Install slapd and tooling
+  ansible.builtin.apt:
+    name: [slapd, ldap-utils, python3-ldap, python3-cryptography, nftables, gzip]
+    state: "{{ 'latest' if ldap_upgrade_packages | bool else 'present' }}"
+    update_cache: true
+    cache_valid_time: "{{ 0 if ldap_upgrade_packages | bool else 3600 }}"
+  notify: Restart slapd
+
+- name: Allow binding to the shared IP before it is assigned
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_nonlocal_bind
+    value: "1"
+    sysctl_file: /etc/sysctl.d/60-ldap.conf
+    reload: true
+  when: ldap_vip | length > 0
+
+- name: Listeners - only node address, shared IP and ldapi
+  ansible.builtin.template:
+    src: default-slapd.j2
+    dest: /etc/default/slapd
+    mode: "0644"
+  notify: Restart slapd
+
+# slapd writes its PID file after dropping privileges.
+- name: Runtime directory at boot
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/slapd.conf
+    mode: "0644"
+    content: "d /run/slapd 0755 openldap openldap -\n"
+  notify: Create runtime directory
+
+- name: Native systemd unit
+  ansible.builtin.template:
+    src: slapd.service.j2
+    dest: /etc/systemd/system/slapd.service
+    mode: "0644"
+  notify: Restart slapd
+
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('openldap') }}"
+    group: openldap
+    mode: "{{ item.mode | default('0750') }}"
+  loop:
+    - { path: /etc/ldap/slapd.d }
+    - { path: /var/lib/ldap }
+    - { path: "{{ ldap_tls_dir }}", owner: root }
+    - { path: "{{ ldap_backup_dir }}", owner: root, mode: "0700" }
+
+- name: Systemd hardening for slapd
+  when: ldap_systemd_hardening | bool
+  block:
+    - name: Drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/slapd.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Drop-in
+      ansible.builtin.template:
+        src: slapd-hardening.conf.j2
+        dest: /etc/systemd/system/slapd.service.d/hardening.conf
+        mode: "0644"
+      notify: Restart slapd

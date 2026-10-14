@@ -1,0 +1,51 @@
+---
+# Hetzner Cloud networks are routed (no ARP between servers): the shared IP is
+# an alias IP that the new master assigns to itself through the API.
+- name: Validate Hetzner settings
+  ansible.builtin.assert:
+    that:
+      - ldap_ha_hetzner_token | default('') | length > 0
+      - ldap_ha_hetzner_network_id is defined
+      - ldap_ha_hetzner_server_id is defined
+      - _peers | map('extract', hostvars) | selectattr('ldap_ha_hetzner_server_id', 'undefined') | list | length == 0
+    fail_msg: >-
+      ldap_ha_provider=hetzner needs ldap_ha_hetzner_token, ldap_ha_hetzner_network_id
+      and ldap_ha_hetzner_server_id for every LDAP server.
+    quiet: true
+
+- name: Hetzner API settings
+  ansible.builtin.copy:
+    dest: /etc/ldap-ha/hetzner.json
+    owner: root
+    group: root
+    mode: "0600"
+    content: "{{ _cfg | to_nice_json }}\n"
+  vars:
+    _cfg:
+      token: "{{ ldap_ha_hetzner_token }}"
+      network: "{{ ldap_ha_hetzner_network_id | int }}"
+      vip: "{{ ldap_ha_vip }}"
+      self: "{{ ldap_ha_hetzner_server_id | int }}"
+      peers: "{{ _peers | map('extract', hostvars, 'ldap_ha_hetzner_server_id') | map('int') | list }}"
+  no_log: true
+
+- name: Hetzner failover script
+  ansible.builtin.copy:
+    src: providers/hetzner-failover
+    dest: /usr/local/libexec/ldap-ha/hetzner-failover
+    owner: root
+    group: root
+    mode: "0700"
+
+# keepalived only calls notify-master on transitions. Reconcile the current
+# master now (provider switched, alias IP changed outside, ...).
+- name: Holds this node the shared IP?
+  ansible.builtin.command: ip -4 -o addr show
+  register: _ldap_ha_addrs
+  changed_when: false
+
+- name: Route the shared IP to the current master
+  ansible.builtin.command: /usr/bin/python3 /usr/local/libexec/ldap-ha/hetzner-failover
+  register: _ldap_ha_reconcile
+  changed_when: "'assigning' in _ldap_ha_reconcile.stderr"
+  when: (' ' ~ ldap_ha_vip ~ '/') in _ldap_ha_addrs.stdout

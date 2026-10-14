@@ -1,0 +1,12 @@
+---
+# Hetzner Cloud networks are routed (no layer 2 between servers), so the shared
+# IP needs the "hetzner" provider. On Proxmox & co. keep the default "vrrp".
+ldap_ha_provider: hetzner
+ldap_ha_hetzner_network_id: "{{ hcloud_network_id }}"
+ldap_ha_hetzner_server_id: "{{ hcloud_server_id }}"
+# Token from HCLOUD_TOKEN / TF_VAR_hcloud_token or terraform/terraform.tfvars.
+ldap_ha_hetzner_token: >-
+  {{ lookup('ansible.builtin.env', 'HCLOUD_TOKEN')
+     or lookup('ansible.builtin.env', 'TF_VAR_hcloud_token')
+     or ((lookup('ansible.builtin.file', inventory_dir ~ '/../terraform/terraform.tfvars', errors='ignore') or '')
+         | regex_search('hcloud_token\s*=\s*"([^"]+)"', '\1') | default([''], true) | first) }}

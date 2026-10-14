@@ -1,0 +1,37 @@
+---
+# Rolling update without data loss: backup -> online reconfiguration (and
+# package upgrade) -> health and replication check, one node at a time. The
+# node currently holding the shared IP goes last.
+- name: Find the shared IP holder
+  hosts: "{{ ldap_target | default('ldap_servers') }}"
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Local addresses
+      ansible.builtin.command: ip -4 -o addr show
+      register: _addrs
+      changed_when: false
+
+    - name: Order nodes
+      ansible.builtin.group_by:
+        key: "{{ 'ldap_update_last' if (ldap_vip | default('') | length > 0 and (' ' ~ ldap_vip ~ '/') in _addrs.stdout) else 'ldap_update_first' }}"
+
+- name: Rolling update
+  hosts: ldap_update_first:ldap_update_last
+  serial: 1
+  become: true
+  vars:
+    ldap_upgrade_packages: true
+  pre_tasks:
+    - name: Backup before changing anything
+      ansible.builtin.command: /usr/local/sbin/slapd-backup
+      changed_when: true
+  roles:
+    - role: openldap.cluster.server
+    - role: openldap.cluster.ha
+      when: ldap_vip | default('') | length > 0
+  post_tasks:
+    - name: Verify health and replication
+      ansible.builtin.include_role:
+        name: openldap.cluster.server
+        tasks_from: verify.yml

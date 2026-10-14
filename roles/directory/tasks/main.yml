@@ -1,0 +1,138 @@
+---
+- name: Manage directory content via ldapi
+  module_defaults:
+    community.general.ldap_attrs: &ldapi
+      server_uri: ldapi:///
+      sasl_class: external
+    community.general.ldap_entry: *ldapi
+    community.general.ldap_search: *ldapi
+  block:
+    # --- users -----------------------------------------------------------------
+    - name: Create users
+      community.general.ldap_entry:
+        dn: "uid={{ item.uid }},{{ ldap_dn_people }}"
+        objectClass: [inetOrgPerson, posixAccount]
+        attributes: "{{ _user_attrs | combine({'userPassword': item.password} if item.password is defined else {}) }}"
+      loop: "{{ _users_present }}"
+      loop_control: &user_loop
+        label: "{{ item.uid }}"
+      no_log: "{{ item.password is defined }}"
+      vars: &user_vars
+        _user_attrs:
+          uid: "{{ item.uid }}"
+          cn: "{{ item.cn | default(item.given_name ~ ' ' ~ item.sn) }}"
+          givenName: "{{ item.given_name }}"
+          sn: "{{ item.sn }}"
+          uidNumber: "{{ item.uid_number }}"
+          gidNumber: "{{ item.gid_number | default(ldap_users_gid) }}"
+          homeDirectory: "{{ item.home | default(ldap_home_base ~ '/' ~ item.uid) }}"
+          mail: "{{ item.mail | default(omit) }}"
+
+    - name: Update user attributes (password and self-service fields untouched)
+      community.general.ldap_attrs:
+        dn: "uid={{ item.uid }},{{ ldap_dn_people }}"
+        state: exact
+        attributes: >-
+          {{ _user_attrs | dict2items | rejectattr('value', 'eq', omit) | items2dict
+             | combine({'loginShell': item.shell} if item.shell is defined else {}) }}
+      loop: "{{ _users_present }}"
+      loop_control: *user_loop
+      vars: *user_vars
+
+    - name: Remove users
+      community.general.ldap_entry:
+        dn: "uid={{ item.uid }},{{ ldap_dn_people }}"
+        state: absent
+      loop: "{{ _users_absent }}"
+      loop_control: *user_loop
+
+    # --- posix groups (incl. primary group and host access groups) ---------------
+    - name: Create groups
+      community.general.ldap_entry:
+        dn: "cn={{ item.name }},{{ ldap_dn_groups }}"
+        objectClass: [groupOfNames, posixGroup]
+        attributes:
+          gidNumber: "{{ item.gid }}"
+          member: "{{ _placeholder }}"
+      loop: "{{ _groups }}"
+      loop_control: &group_loop
+        label: "{{ item.name }}"
+
+    - name: Group attributes and members
+      community.general.ldap_attrs:
+        dn: "cn={{ item.name }},{{ ldap_dn_groups }}"
+        state: exact
+        attributes:
+          gidNumber: "{{ item.gid }}"
+          description: "{{ item.description | default(omit) }}"
+          member: "{{ item.members | map('regex_replace', '^(.*)$', 'uid=\\1,' ~ ldap_dn_people) | list or [_placeholder] }}"
+      loop: "{{ _groups }}"
+      loop_control: *group_loop
+
+    # --- roles -------------------------------------------------------------------
+    - name: Create roles
+      community.general.ldap_entry:
+        dn: "cn={{ item.name }},{{ ldap_dn_roles }}"
+        objectClass: [groupOfNames]
+        attributes:
+          member: "{{ _placeholder }}"
+      loop: "{{ _all_roles }}"
+      loop_control: &role_loop
+        label: "{{ item.name }}"
+
+    - name: Role members and granted groups
+      community.general.ldap_attrs:
+        dn: "cn={{ item.name }},{{ ldap_dn_roles }}"
+        state: exact
+        attributes:
+          description: "{{ item.description | default(omit) }}"
+          member: "{{ _rbac.roles[item.name] | map('regex_replace', '^(.*)$', 'uid=\\1,' ~ ldap_dn_people) | list or [_placeholder] }}"
+          seeAlso: >-
+            {{ (item.groups | default([]) | map('regex_replace', '^(.*)$', 'cn=\1,' ~ ldap_dn_groups) | list)
+               + (item.host_access | default([]) | map('regex_replace', '^(.*)$', 'cn=access-\1,' ~ ldap_dn_groups) | list) }}
+      loop: "{{ _all_roles }}"
+      loop_control: *role_loop
+
+    # --- sudo --------------------------------------------------------------------
+    - name: Sudo rules
+      community.general.ldap_entry:
+        dn: "cn={{ item.name }},{{ ldap_dn_sudoers }}"
+        objectClass: [sudoRole]
+        attributes:
+          sudoUser: "{{ item.users or ['!ALL'] }}"
+      loop: "{{ _rbac.sudo }}"
+      loop_control: &sudo_loop
+        label: "{{ item.name }}"
+
+    - name: Sudo rule content
+      community.general.ldap_attrs:
+        dn: "cn={{ item.name }},{{ ldap_dn_sudoers }}"
+        state: exact
+        attributes:
+          description: "Generated from role {{ item.role }}"
+          sudoUser: "{{ item.users or ['!ALL'] }}"
+          sudoHost: "{{ item.hosts }}"
+          sudoCommand: "{{ item.commands }}"
+          sudoRunAsUser: "{{ item.runas }}"
+          sudoOption: "{{ item.options or omit }}"
+          sudoOrder: "{{ item.order }}"
+      loop: "{{ _rbac.sudo }}"
+      loop_control: *sudo_loop
+
+    - name: Find existing sudo rules
+      community.general.ldap_search:
+        dn: "{{ ldap_dn_sudoers }}"
+        scope: onelevel
+        filter: (objectClass=sudoRole)
+        attrs: [cn]
+      register: _sudo_existing
+      when: ldap_prune_sudoers | bool
+
+    - name: Remove stale sudo rules
+      community.general.ldap_entry:
+        dn: "{{ item.dn }}"
+        state: absent
+      loop: "{{ _sudo_existing.results | default([]) | rejectattr('cn', 'in', _rbac.sudo | map(attribute='name') | list) | list }}"
+      loop_control:
+        label: "{{ item.dn }}"
+      when: ldap_prune_sudoers | bool

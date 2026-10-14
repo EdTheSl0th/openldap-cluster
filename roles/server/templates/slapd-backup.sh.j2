@@ -1,0 +1,12 @@
+#!/bin/sh
+# {{ ansible_managed }}
+# Online dump of cn=config (-n0) and the directory (-n1). slapcat on back-mdb
+# is safe while slapd is running.
+set -eu
+umask 077
+dir={{ ldap_backup_dir }}
+ts=$(date +%Y%m%dT%H%M%S)
+slapcat -F /etc/ldap/slapd.d -n 0 | gzip > "$dir/$ts-config.ldif.gz"
+slapcat -F /etc/ldap/slapd.d -n 1 | gzip > "$dir/$ts-data.ldif.gz"
+find "$dir" -name '*.ldif.gz' -mtime +{{ ldap_backup_keep_days }} -delete
+echo "$dir/$ts"
