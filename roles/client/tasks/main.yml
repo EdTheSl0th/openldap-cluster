@@ -78,7 +78,8 @@
     dest: /etc/sssd/sssd.conf
     owner: root
     group: root
-    mode: "0600"
+    # SSSD >= 2.10 (Debian 13) makes /etc/sssd group-readable on start.
+    mode: "{{ '0640' if ansible_facts.distribution_major_version | int >= 13 else '0600' }}"
   notify: Restart sssd
 
 - name: Name service switch uses SSSD
