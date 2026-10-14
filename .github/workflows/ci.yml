@@ -46,6 +46,9 @@ jobs:
         with:
           ansible-core-version: ${{ matrix.ansible }}
           testing-type: ${{ matrix.type }}
+          # No Codecov: avoids uploading data to a third party and the nested
+          # actions codecov/codecov-action and irongut/CodeCoverageSummary.
+          coverage: never
 
   build:
     name: Build collection
