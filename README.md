@@ -135,6 +135,10 @@ playbook; server changes and package updates go through
 | CI | ansible-lint, `ansible-test sanity` and `units` for ansible-core 2.19–2.21, build |
 | [`tests/hetzner/`](tests/hetzner/README.md) | end-to-end tests on real VMs (Debian 12 and 13): replication, client login, RBAC, hardening, failover, rolling update |
 
+## Security
+
+Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
+
 ## License
 
 GPL-3.0-or-later, see [LICENSE](LICENSE).

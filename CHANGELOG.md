@@ -5,6 +5,9 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+- Repository: `SECURITY.md` (private vulnerability reporting), Dependabot for
+  GitHub Actions, CI with read-only token permissions and actions pinned to
+  commit SHAs.
 - Documentation: README per role with all variables, `docs/` with
   architecture, RBAC, security, operations, platforms, variables and plugins.
 - `client`: `sssd.conf` stays idempotent on Debian 13 (SSSD 2.10 makes it

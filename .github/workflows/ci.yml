@@ -7,14 +7,18 @@ name: CI
   pull_request:
   workflow_dispatch:
 
+# Least privilege for the GITHUB_TOKEN; no job needs to write.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: ansible-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.12"
 
@@ -38,7 +42,7 @@ jobs:
         ansible: [stable-2.19, stable-2.20, stable-2.21]
         type: [sanity, units]
     steps:
-      - uses: ansible-community/ansible-test-gh-action@release/v1
+      - uses: ansible-community/ansible-test-gh-action@6ded727edb598e670ac056a8e680ca4050bac0a3  # v1.18.0
         with:
           ansible-core-version: ${{ matrix.ansible }}
           testing-type: ${{ matrix.type }}
@@ -47,9 +51,9 @@ jobs:
     name: Build collection
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
         with:
           python-version: "3.12"
 
@@ -58,7 +62,7 @@ jobs:
           pip install ansible-core
           ansible-galaxy collection build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: collection
           path: "*.tar.gz"
