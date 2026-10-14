@@ -3,6 +3,13 @@
 All notable changes to `openldap.cluster` are documented here. The project
 follows [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Documentation: README per role with all variables, `docs/` with
+  architecture, RBAC, security, operations, platforms, variables and plugins.
+- `client`: `sssd.conf` stays idempotent on Debian 13 (SSSD 2.10 makes it
+  group-readable on start).
+
 ## 1.0.0
 
 Initial release.
