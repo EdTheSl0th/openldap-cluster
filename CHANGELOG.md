@@ -7,6 +7,8 @@ incompatible changes the major version.
 
 ## Unreleased
 
+## 1.0.1
+
 ### Bugfixes
 
 - `server`, `client`, `ha`: refresh the apt cache when no package lists
