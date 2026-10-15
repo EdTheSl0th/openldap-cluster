@@ -9,10 +9,11 @@
   ansible.builtin.copy:
     dest: /etc/nftables.conf
     mode: "0755"
+    # No "flush ruleset": rules of other software (Docker, fail2ban, ...)
+    # stay untouched; every file in nftables.d replaces only its own table.
     content: |
       #!/usr/sbin/nft -f
       # Managed by Ansible (openldap.cluster)
-      flush ruleset
       include "/etc/nftables.d/*.nft"
   notify: Reload nftables
 

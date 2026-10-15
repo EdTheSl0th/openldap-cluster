@@ -8,12 +8,20 @@
     vtype: boolean
     value: "true"
 
+# cache_valid_time alone would skip "apt update" on hosts whose package lists
+# are empty (minimal images, containers) - then no package is found.
+- name: Look for package lists
+  ansible.builtin.find:
+    paths: /var/lib/apt/lists
+    patterns: "*_Packages*"
+  register: _ldap_apt_lists
+
 - name: Install slapd and tooling
   ansible.builtin.apt:
     name: [slapd, ldap-utils, python3-ldap, python3-cryptography, nftables, gzip]
     state: "{{ 'latest' if ldap_upgrade_packages | bool else 'present' }}"
     update_cache: true
-    cache_valid_time: "{{ 0 if ldap_upgrade_packages | bool else 3600 }}"
+    cache_valid_time: "{{ 0 if (ldap_upgrade_packages | bool or _ldap_apt_lists.matched == 0) else 3600 }}"
   notify: Restart slapd
 
 - name: Allow binding to the shared IP before it is assigned

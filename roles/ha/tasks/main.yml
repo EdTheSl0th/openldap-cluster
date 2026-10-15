@@ -19,10 +19,20 @@
           | selectattr('ipv4', 'defined') | selectattr('ipv4.address', 'equalto', ldap_node_address)
           | map(attribute='device') | first) }}
 
+# cache_valid_time alone would skip "apt update" on hosts whose package lists
+# are empty (minimal images, containers) - then no package is found.
+- name: Look for package lists
+  ansible.builtin.find:
+    paths: /var/lib/apt/lists
+    patterns: "*_Packages*"
+  register: _ldap_apt_lists
+
 - name: Install keepalived
   ansible.builtin.apt:
     name: [keepalived, python3]
     state: present
+    update_cache: true
+    cache_valid_time: "{{ 3600 if _ldap_apt_lists.matched > 0 else 0 }}"
     install_recommends: false
 
 - name: Directories

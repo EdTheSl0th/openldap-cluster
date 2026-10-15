@@ -83,7 +83,7 @@ The TLS library is detected on the node; only the matching setting is used.
 | `ldap_size_limit` | `500` | Default size limit for searches. Host accounts and the replicator are unlimited (`ldap_limits`). |
 | `ldap_time_limit` | `60` | Default time limit for searches (seconds). |
 | `ldap_db_max_size` | `1073741824` | Maximum size of the MDB database in bytes. |
-| `ldap_firewall_enabled` | `true` | Manage nftables. **Replaces `/etc/nftables.conf`** (`flush ruleset` + `/etc/nftables.d/*.nft`); disable if you manage the firewall elsewhere. |
+| `ldap_firewall_enabled` | `true` | Manage nftables: own table `inet ldap_filter` in `/etc/nftables.d/50-ldap.nft` (input policy drop). `/etc/nftables.conf` is replaced by an include of `/etc/nftables.d/*.nft` **without** `flush ruleset`, so rules of other software (Docker, fail2ban, …) stay; put own rules into `/etc/nftables.d/`. Disable if you manage the firewall elsewhere. |
 | `ldap_firewall_ssh_port` | `22` | SSH port allowed by the firewall. |
 | `ldap_firewall_extra_rules` | `[]` | Additional nftables rules for the input chain, e.g. `["tcp dport 9100 ip saddr 10.0.0.5 accept"]`. |
 | `ldap_systemd_hardening` | `true` | Sandboxing drop-in for the slapd unit (`ProtectSystem=strict`, minimal capabilities, …). |

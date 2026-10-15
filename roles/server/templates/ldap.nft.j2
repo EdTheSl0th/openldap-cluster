@@ -1,4 +1,8 @@
 # {{ ansible_managed }}
+# Replace only this table (works without "flush ruleset" and on every reload).
+table inet ldap_filter
+delete table inet ldap_filter
+
 table inet ldap_filter {
   set ldap_clients {
     type ipv4_addr

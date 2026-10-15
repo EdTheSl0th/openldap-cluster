@@ -38,13 +38,21 @@
         passwd: "{{ _ldap_host_pw }}"
       no_log: true
 
+# cache_valid_time alone would skip "apt update" on hosts whose package lists
+# are empty (minimal images, containers) - then no package is found.
+- name: Look for package lists
+  ansible.builtin.find:
+    paths: /var/lib/apt/lists
+    patterns: "*_Packages*"
+  register: _ldap_apt_lists
+
 - name: Install SSSD
   ansible.builtin.apt:
     name: "{{ ['sssd-ldap', 'sssd-tools', 'libnss-sss', 'libpam-sss', 'ldap-utils', 'ca-certificates']
               + (['libsss-sudo', 'sudo'] if ldap_client_sudo | bool else []) }}"
     state: present
     update_cache: true
-    cache_valid_time: 3600
+    cache_valid_time: "{{ 3600 if _ldap_apt_lists.matched > 0 else 0 }}"
     install_recommends: false
 
 - name: Trust the LDAP CA
