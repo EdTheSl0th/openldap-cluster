@@ -2,7 +2,7 @@
 profile: production
 exclude_paths:
   - .github/
-  - tests/hetzner/.collections/
+  - tests/.collections/
   - tests/hetzner/terraform/
   - tests/output/
 skip_list:

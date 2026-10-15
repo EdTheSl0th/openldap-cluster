@@ -5,7 +5,7 @@ __pycache__/
 tests/output/
 
 # End-to-end test environment: secrets, state and generated files
-tests/hetzner/.collections/
+tests/.collections/
 tests/hetzner/inventory/hosts.yml
 tests/hetzner/inventory/.secrets/
 tests/hetzner/inventory/.ldap-pki/

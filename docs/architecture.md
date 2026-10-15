@@ -77,9 +77,9 @@ the highest priority becomes master and runs `notify-master`. `nopreempt`
 keeps the IP where it is when the old master returns. How the IP reaches the
 new master depends on the provider – see [platforms](platforms.md).
 
-Measured failover in the test environment: about 5–8 s with `vrrp` (VIP
-placement), about 20–30 s with `hetzner` (mostly the API action). SSSD
-additionally knows every provider as backup URI.
+Measured failover in the tests: about 5 s with `vrrp` (Molecule, client
+access through the shared IP), about 20–30 s with `hetzner` (mostly the API
+action). SSSD additionally knows every provider as backup URI.
 
 ## Derived secrets
 

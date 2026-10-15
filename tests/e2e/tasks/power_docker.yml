@@ -1,0 +1,6 @@
+---
+# Hard power-off/on of a Molecule container: "docker kill" stops it without a
+# shutdown, like pulling the plug.
+- name: Docker power state {{ power_state ~ ' for ' ~ power_host }}
+  ansible.builtin.command: "docker {{ 'kill' if power_state == 'off' else 'start' }} {{ power_host }}"
+  changed_when: true

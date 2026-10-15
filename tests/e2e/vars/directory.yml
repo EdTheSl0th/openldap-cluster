@@ -1,0 +1,78 @@
+---
+# Shared test data for the end-to-end tests (Molecule and Hetzner), loaded as
+# extra vars (-e @tests/e2e/vars/directory.yml). The update test adds the
+# *_extra lists (vars/update_change.yml).
+
+ldap_domain: test.internal
+ldap_organization: Test Org
+
+# --- RBAC example ---------------------------------------------------------------
+ldap_groups: "{{ test_groups + test_groups_extra | default([]) }}"
+ldap_roles: "{{ test_roles + test_roles_extra | default([]) }}"
+ldap_users: "{{ test_users + test_users_extra | default([]) }}"
+
+test_groups:
+  - { name: developers, gid: 20001, description: Software developers }
+  - { name: operations, gid: 20002, description: Operations team }
+  - { name: dbadmins, gid: 20003, description: Database administrators }
+  - { name: logreaders, gid: 20004, description: May read system logs }
+
+ldap_hostgroups:
+  - { name: all-servers, gid: 30001, hosts: [ALL] }
+  - { name: app, gid: 30002, hosts: [client1.test.internal] }
+  - { name: db, gid: 30003, hosts: [db1.test.internal] }
+
+test_roles:
+  - name: platform-admin
+    description: Full administration of all servers
+    groups: [operations, developers, logreaders]
+    host_access: [all-servers]
+    sudo:
+      - { hostgroups: [all-servers], commands: [ALL] }
+  - name: app-developer
+    description: Deploys and debugs the application
+    groups: [developers]
+    host_access: [app]
+    sudo:
+      - hostgroups: [app]
+        commands: ["/usr/bin/systemctl restart nginx", "/usr/bin/journalctl"]
+        options: ["!authenticate"]
+  - name: dba
+    description: Database administration
+    groups: [dbadmins]
+    host_access: [db]
+    sudo:
+      - { hostgroups: [db], commands: [ALL], runas: [postgres] }
+  - name: auditors
+    description: Read access to the directory and logs
+    groups: [logreaders]
+
+# *_extra lists are added by vars/update_change.yml (update test).
+# Test passwords are derived from the seed so nothing is stored in git.
+test_users:
+  - uid: alice
+    given_name: Alice
+    sn: Admin
+    uid_number: 10001
+    mail: alice@test.internal
+    roles: [platform-admin, ldap-admins]
+    shell: /bin/bash
+    password: "{{ ldap_secret_seed | openldap.cluster.derive_password('user:alice', 24) }}"
+  - uid: bob
+    given_name: Bob
+    sn: Developer
+    uid_number: 10002
+    roles: [app-developer]
+    password: "{{ ldap_secret_seed | openldap.cluster.derive_password('user:bob', 24) }}"
+  - uid: carol
+    given_name: Carol
+    sn: DBA
+    uid_number: 10003
+    roles: [dba]
+    password: "{{ ldap_secret_seed | openldap.cluster.derive_password('user:carol', 24) }}"
+  - uid: dave
+    given_name: Dave
+    sn: Helpdesk
+    uid_number: 10004
+    roles: [user-admins, auditors]
+    password: "{{ ldap_secret_seed | openldap.cluster.derive_password('user:dave', 24) }}"

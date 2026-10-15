@@ -1,0 +1,9 @@
+---
+# Hard power-off/on of a server through the Hetzner Cloud API.
+- name: Hetzner API power state {{ power_state ~ ' for ' ~ power_host }}
+  ansible.builtin.uri:
+    url: "{{ api }}/{{ hostvars[power_host].hcloud_server_id }}/actions/power{{ power_state }}"
+    method: POST
+    headers: "{{ api_headers }}"
+    status_code: [200, 201]
+  no_log: true

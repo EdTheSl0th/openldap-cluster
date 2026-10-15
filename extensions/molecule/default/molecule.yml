@@ -1,0 +1,83 @@
+---
+# Two providers and one client as systemd containers in one layer-2 network.
+# The shared IP uses the default provider "vrrp" (gratuitous ARP), so clients
+# reach it like on Proxmox/VMware. MOLECULE_DISTRO: 12 (default) or 13.
+dependency:
+  name: galaxy
+  options:
+    requirements-file: ${MOLECULE_SCENARIO_DIRECTORY}/requirements.yml
+
+driver:
+  name: docker
+
+platforms:
+  - &node
+    name: ldap1
+    image: debian:${MOLECULE_DISTRO:-12}
+    dockerfile: Dockerfile.j2
+    pre_build_image: false
+    privileged: true
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /tmp
+    command: /lib/systemd/systemd
+    docker_networks:
+      - name: ldapnet
+        ipam_config:
+          - subnet: 172.30.0.0/24
+            iprange: 172.30.0.128/25
+            gateway: 172.30.0.1
+    networks:
+      - name: ldapnet
+        ipv4_address: 172.30.0.11
+    groups: [ldap_servers]
+  - <<: *node
+    name: ldap2
+    networks:
+      - name: ldapnet
+        ipv4_address: 172.30.0.12
+  - <<: *node
+    name: client1
+    networks:
+      - name: ldapnet
+        ipv4_address: 172.30.0.21
+    groups: [ldap_clients]
+
+provisioner:
+  name: ansible
+  env:
+    # tests/.collections links to the repository root (make -C tests collection)
+    ANSIBLE_COLLECTIONS_PATH: ${MOLECULE_PROJECT_DIRECTORY}/tests/.collections:~/.ansible/collections
+  options:
+    # Shared test data (domain, RBAC) of the end-to-end tests
+    extra-vars: "@${MOLECULE_PROJECT_DIRECTORY}/tests/e2e/vars/directory.yml"
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+  inventory:
+    group_vars:
+      all:
+        # Public test-only seed; never use it elsewhere.
+        ldap_secret_seed: molecule-test-seed-public-not-secret-0123456789
+        ldap_pki_dir: ${MOLECULE_EPHEMERAL_DIRECTORY}/pki
+        ldap_vip: 172.30.0.10
+        ldap_allowed_networks: [172.30.0.0/24]
+        ldap_ha_provider: vrrp
+        test_platform: docker
+        test_vip_routed: true
+    host_vars:
+      ldap1:
+        ldap_node_address: 172.30.0.11
+        ldap_node_fqdn: ldap1.test.internal
+      ldap2:
+        ldap_node_address: 172.30.0.12
+        ldap_node_fqdn: ldap2.test.internal
+      client1:
+        ldap_node_address: 172.30.0.21
+        ldap_client_fqdn: client1.test.internal
+
+verifier:
+  name: ansible

@@ -7,6 +7,24 @@ incompatible changes the major version.
 
 ## Unreleased
 
+### Bugfixes
+
+- `server`, `client`, `ha`: refresh the apt cache when no package lists
+  exist (minimal images, containers, some VM templates). Before, the roles
+  trusted `cache_valid_time` and failed with "No package matching …".
+- `server`: the firewall replaces only its own nftables table
+  (`inet ldap_filter`). `/etc/nftables.conf` no longer runs
+  `flush ruleset`, which deleted the rules of other software (Docker,
+  fail2ban, …). Own rules belong in `/etc/nftables.d/`.
+
+### Tests and CI
+
+- Molecule scenario (Docker, Debian 12/13, two providers + client) in CI:
+  converge, idempotence and the end-to-end tests, including VRRP failover
+  with client access through the shared IP.
+- End-to-end tests moved to `tests/e2e` and shared by Molecule and the
+  Hetzner VM environment, which remains a manual pre-release test.
+
 ## 1.0.0
 
 Initial release.

@@ -3,13 +3,13 @@
 #   make init | up | check | ssh VM=ldap1 | reset [VM=ldap1] | down
 #   make deploy               ldap1, then ldap2 (separately), directory, clients
 #   make deploy-node NODE=ldap2
-#   make test                 client/RBAC/hardening + failover + update tests
+#   make test                 client/RBAC/hardening + failover + update tests (tests/e2e)
 #   make play PLAYBOOK=playbooks/site.yml [LIMIT=ldap1]
 
 TF       := tofu -chdir=terraform
-# The repository root is the collection; expose it to Ansible via a symlink.
-COLL_DIR := $(CURDIR)/.collections/ansible_collections/openldap
-ANSIBLE  := ANSIBLE_CONFIG=$(CURDIR)/ansible.cfg ansible-playbook $(ARGS)
+E2E      := $(CURDIR)/../e2e
+# Shared test data (domain, RBAC) as extra vars, see tests/e2e/README.md.
+ANSIBLE  := ANSIBLE_CONFIG=$(CURDIR)/ansible.cfg ansible-playbook -e @$(E2E)/vars/directory.yml $(ARGS)
 VM       ?=
 NODE     ?=
 LIMIT    ?=
@@ -26,9 +26,9 @@ up:
 	$(TF) apply
 	$(MAKE) check
 
+# The repository root is the collection; tests/.collections links to it.
 collection:
-	@mkdir -p $(COLL_DIR)
-	@ln -sfn ../../../../.. $(COLL_DIR)/cluster
+	@$(MAKE) -s -C .. collection
 
 check: collection
 	$(ANSIBLE) playbooks/check.yml
@@ -71,10 +71,10 @@ backup: collection
 test: test-client test-failover test-update
 
 test-client: collection
-	$(ANSIBLE) playbooks/test_client.yml
+	$(ANSIBLE) $(E2E)/test_client.yml
 
 test-failover: collection
-	$(ANSIBLE) playbooks/test_failover.yml
+	$(ANSIBLE) $(E2E)/test_failover.yml
 
 test-update: collection
-	$(ANSIBLE) playbooks/test_update.yml -e @playbooks/vars/update_change.yml
+	$(ANSIBLE) $(E2E)/test_update.yml

@@ -130,10 +130,12 @@ playbook; server changes and package updates go through
 |---|---|
 | `make lint` | ansible-lint, production profile |
 | `make units` | unit tests of the filter plugins (`PYTHON=` with pytest) |
+| `make molecule` | Molecule (Docker): two providers and a client, converge, idempotence and the end-to-end tests incl. VRRP failover (`MOLECULE_DISTRO=12\|13`) |
 | `make sanity` | `ansible-test sanity` and `units` on exactly the tracked files (as in CI) |
 | `make build` | build the collection artifact |
-| CI | ansible-lint, `ansible-test sanity` and `units` for ansible-core 2.19–2.21, build |
-| [`tests/hetzner/`](tests/hetzner/README.md) | end-to-end tests on real VMs (Debian 12 and 13): replication, client login, RBAC, hardening, failover, rolling update |
+| CI | ansible-lint, `ansible-test sanity` and `units` for ansible-core 2.19–2.21, Molecule for Debian 12 and 13, build |
+| [`tests/e2e/`](tests/e2e/README.md) | end-to-end tests shared by Molecule and the VM environment |
+| [`tests/hetzner/`](tests/hetzner/README.md) | the same tests on real VMs (Hetzner Cloud), run manually before releases: provider `hetzner`, hard power-off |
 
 ## Security
 

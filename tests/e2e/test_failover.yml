@@ -9,7 +9,8 @@
 # Provider "hetzner" additionally checks the alias IP via the API. Client access
 # through the VIP is only checked when the network routes it (test_vip_routed;
 # Hetzner's routed network cannot carry plain VRRP/gratuitous ARP).
-# Powering servers off/on uses the Hetzner API of the test environment.
+# Hard power-off/on depends on the test platform (test_platform: hetzner uses
+# the Hetzner API, docker kills/starts the Molecule container).
 - name: Failover test
   hosts: localhost
   gather_facts: false
@@ -19,6 +20,7 @@
     vip: "{{ hostvars[servers[0]].ldap_vip }}"
     provider: "{{ hostvars[servers[0]].ldap_ha_provider | default('vrrp') }}"
     vip_routed: "{{ test_vip_routed | default(provider == 'hetzner') | bool }}"
+    platform: "{{ hostvars[servers[0]].test_platform | default('hetzner') }}"
     suffix: "{{ hostvars[servers[0]].ldap_domain | openldap.cluster.suffix_from_domain }}"
     api: https://api.hetzner.cloud/v1/servers
     api_headers:
@@ -106,12 +108,10 @@
 
     # --- 3. hard failure of the new holder -------------------------------------------
     - name: Hard power-off of {{ standby }}
-      ansible.builtin.uri:
-        url: "{{ api }}/{{ hostvars[standby].hcloud_server_id }}/actions/poweroff"
-        method: POST
-        headers: "{{ api_headers }}"
-        status_code: [200, 201]
-      no_log: true
+      ansible.builtin.include_tasks: "tasks/power_{{ platform }}.yml"
+      vars:
+        power_host: "{{ standby }}"
+        power_state: "off"
 
     - name: Start of outage
       ansible.builtin.set_fact:
@@ -141,19 +141,16 @@
 
     # --- 4. recovery ------------------------------------------------------------------------
     - name: Power on {{ standby }}
-      ansible.builtin.uri:
-        url: "{{ api }}/{{ hostvars[standby].hcloud_server_id }}/actions/poweron"
-        method: POST
-        headers: "{{ api_headers }}"
-        status_code: [200, 201]
-      no_log: true
+      ansible.builtin.include_tasks: "tasks/power_{{ platform }}.yml"
+      vars:
+        power_host: "{{ standby }}"
+        power_state: "on"
 
     - name: Wait for {{ standby }}
-      ansible.builtin.wait_for:
-        host: "{{ hostvars[standby].ansible_host }}"
-        port: 22
-        delay: 10
+      ansible.builtin.wait_for_connection:
+        delay: 5
         timeout: 300
+      delegate_to: "{{ standby }}"
 
     - name: Outage write was replicated to {{ standby }}
       ansible.builtin.command: >-

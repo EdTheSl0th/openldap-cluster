@@ -1,6 +1,15 @@
 ---
-# Update without data loss. Run with the change set:
-#   ansible-playbook playbooks/test_update.yml -e @playbooks/vars/update_change.yml
+# Update without data loss: rolls the change set vars/update_change.yml (new
+# group/role/user, stricter policy, new index) through the cluster.
+- name: Load the change set
+  hosts: all
+  gather_facts: false
+  tasks:
+    # include_vars stays in effect for the rest of the run, so the imported
+    # collection playbooks below see the change set as well.
+    - name: Change set
+      ansible.builtin.include_vars: vars/update_change.yml
+
 - name: State before the update
   hosts: ldap_servers
   become: true

@@ -1,0 +1,8 @@
+---
+# The same end-to-end tests as on the Hetzner VMs (tests/e2e).
+- name: Replication, client binding, RBAC, hardening
+  ansible.builtin.import_playbook: ../../../tests/e2e/test_client.yml
+- name: Failover of the shared IP (VRRP), including a hard container kill
+  ansible.builtin.import_playbook: ../../../tests/e2e/test_failover.yml
+- name: Rolling update without data loss
+  ansible.builtin.import_playbook: ../../../tests/e2e/test_update.yml

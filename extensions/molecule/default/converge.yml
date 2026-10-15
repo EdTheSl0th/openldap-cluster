@@ -1,0 +1,7 @@
+---
+- name: Providers (one at a time)
+  ansible.builtin.import_playbook: openldap.cluster.server
+- name: Directory content
+  ansible.builtin.import_playbook: openldap.cluster.directory
+- name: Clients
+  ansible.builtin.import_playbook: openldap.cluster.client

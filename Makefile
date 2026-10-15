@@ -4,16 +4,18 @@
 #   make sanity  ansible-test sanity + units on a copy of the tracked files
 #                (same content as CI; ansible-test needs the path
 #                .../ansible_collections/openldap/cluster)
+#   make molecule  Molecule scenario (Docker): 2 providers + client, converge,
+#                idempotence, end-to-end tests; MOLECULE_DISTRO=12|13
 #   make build   build the collection artifact
 
-COLLECTIONS := $(CURDIR)/tests/hetzner/.collections
+COLLECTIONS := $(CURDIR)/tests/.collections
 PYTHON      ?= python3
 SANITY_PYTHON ?= 3.12
 
-.PHONY: collection lint units sanity build
+.PHONY: collection lint units sanity molecule build
 
 collection:
-	@$(MAKE) -s -C tests/hetzner collection
+	@$(MAKE) -s -C tests collection
 
 lint: collection
 	ANSIBLE_COLLECTIONS_PATH=$(COLLECTIONS):$$HOME/.ansible/collections ansible-lint
@@ -29,6 +31,11 @@ sanity:
 	cd $(SANITY_DIR) && git init -q && git add -A && \
 		ansible-test sanity --venv --python $(SANITY_PYTHON) && \
 		ansible-test units --venv --python $(SANITY_PYTHON)
+
+MOLECULE_DISTRO ?= 12
+
+molecule: collection
+	MOLECULE_DISTRO=$(MOLECULE_DISTRO) molecule test
 
 build:
 	ansible-galaxy collection build --force

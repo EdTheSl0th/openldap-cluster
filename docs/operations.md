@@ -122,6 +122,15 @@ sss_cache -E && id <user>
 sudo -l -U <user>
 ```
 
+## Release checklist
+
+1. CI green on `main`: lint, sanity/units (ansible-core 2.19–2.21) and
+   Molecule for Debian 12 and 13 (converge, idempotence, end-to-end tests).
+2. On real VMs, both Debian versions ([tests/hetzner](../tests/hetzner/README.md)):
+   `make up deploy test`, then `make down`. Covers what containers cannot:
+   provider `hetzner`, hard power-off of a VM, real kernels and reboots.
+3. Version in `galaxy.yml`, `CHANGELOG.md`, tag `vX.Y.Z`.
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |
